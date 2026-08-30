@@ -1,0 +1,10 @@
+[Unit]
+Description=Verificar Telegram vaprizziobot cada minuto
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Unit=openclaw-telegram-watchdog.service
+
+[Install]
+WantedBy=timers.target

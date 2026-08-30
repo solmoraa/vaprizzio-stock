@@ -1,0 +1,8 @@
+[Unit]
+Description=Vigilar Telegram vaprizziobot en OpenClaw
+After=network-online.target openclaw-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/openclaw-telegram-watchdog
