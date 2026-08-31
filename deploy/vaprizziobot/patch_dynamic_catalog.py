@@ -86,7 +86,10 @@ AGENT_RULES = r'''
   por otro modelo que tenga un sabor parecido.
 - La plataforma debe estar expresamente indicada. Si falta, preguntar solo
   `¿Por qué medio realizaste la venta?`; no deducir venta presencial. Cuando
-  este confirmada enviar `"plataforma_confirmada":true`.
+  este confirmada enviar `"plataforma_confirmada":true`. Frases como `me hablo
+  por WhatsApp`, `me escribio por Instagram`, `me contacto por Messenger` o
+  `la venta fue por Tienda Nube` confirman expresamente la plataforma; no
+  volver a preguntarla.
 - Usar la clave `forma_pago`. Efectivo se envia como `EFECTIVO`; no confundir
   forma de pago con plataforma.
 - Registrar con una sola ejecucion de `agente_vaprizzio.py registrar-venta`.

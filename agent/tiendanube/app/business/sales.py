@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from difflib import get_close_matches
 from typing import Any
 
 from app import order_sync as legacy
@@ -33,35 +32,10 @@ from .stock import (
 )
 
 
-# ============================================================
-# MODELOS PERMITIDOS EN LA LISTA DESPLEGABLE DE VENTAS
-# ============================================================
-
-MODELOS_VENTAS = (
-    "Elfbar 15K",
-    "Elfbar TE30K",
-    "Elfbar Create BC pro 40k",
-    "Elfbar Ice king",
-    "Elfbar Summer",
-    "Elfbar pro 45K",
-    "Ignite v-nano",
-    "Ignite v155",
-    "Ignite v250",
-    "Ignite v300 slim",
-    "Lost Mary Mixer",
-    "Lost Mary Mixer 30k",
-    "Lost Mary MO 5k",
-    "Geek Bar Pulse x",
-    "BLVK",
-    "Mayorista",
-    "Airmez 40k auris",
-    "Dummy 8k",
-    "Maskking 100k",
-)
-
-
-# Conversión desde el nombre usado en Productos/Tiendanube
-# hacia el nombre permitido en la lista desplegable de Ventas.
+# Equivalencias historicas entre nombres de Productos/Tiendanube y Ventas.
+# Esta tabla solo corrige diferencias conocidas entre ambas hojas. No es una
+# lista de modelos permitidos: cualquier modelo nuevo conserva su nombre exacto
+# del catalogo y se valida contra el desplegable real de Google Sheets.
 ALIAS_MODELOS = {
     "elfbar bc 15k": "Elfbar 15K",
     "elfbar 15k": "Elfbar 15K",
@@ -129,8 +103,11 @@ ALIAS_MODELOS = {
 
 def modelo_para_ventas(modelo_productos: Any) -> str:
     """
-    Convierte el modelo de Productos al valor exacto que
-    acepta la lista desplegable de la hoja Ventas.
+    Aplica una equivalencia historica exacta cuando existe.
+
+    Los modelos nuevos se devuelven sin cambios. La fuente de verdad es el
+    catalogo de Productos y el desplegable vivo de Google Sheets, no una lista
+    estatica dentro del codigo.
     """
     original = texto(modelo_productos)
 
@@ -141,36 +118,7 @@ def modelo_para_ventas(modelo_productos: Any) -> str:
 
     normalized = normalizar(original)
 
-    direct = ALIAS_MODELOS.get(normalized)
-
-    if direct:
-        return direct
-
-    for allowed in MODELOS_VENTAS:
-        if normalizar(allowed) == normalized:
-            return allowed
-
-    normalized_options = {
-        normalizar(option): option
-        for option in MODELOS_VENTAS
-    }
-
-    close = get_close_matches(
-        normalized,
-        list(normalized_options),
-        n=1,
-        cutoff=0.82,
-    )
-
-    if close:
-        return normalized_options[close[0]]
-
-    raise BusinessError(
-        f"El modelo {original!r} no está configurado "
-        "en la lista desplegable de Ventas. "
-        "Hay que agregar su equivalencia en "
-        "ALIAS_MODELOS."
-    )
+    return ALIAS_MODELOS.get(normalized, original)
 
 
 # ============================================================
@@ -866,24 +814,66 @@ def opciones_dropdown_celda(
         condition_type = condition.get("type")
         values = condition.get("values") or []
 
-        if condition_type != "ONE_OF_LIST":
-            return []
-
         result = []
 
-        for value in values:
-            option = texto(
-                value.get("userEnteredValue")
-            )
+        if condition_type == "ONE_OF_LIST":
+            for value in values:
+                option = texto(
+                    value.get("userEnteredValue")
+                )
 
-            if option:
-                result.append(option)
+                if option:
+                    result.append(option)
 
-        return result
+        elif condition_type == "ONE_OF_RANGE":
+            # Los desplegables modernos suelen tomar sus opciones de un rango
+            # auxiliar. Antes se ignoraba ese caso y se caia en la lista fija
+            # antigua, por lo que todo modelo nuevo era rechazado.
+            for value in values:
+                source_range = texto(
+                    value.get("userEnteredValue")
+                )
+
+                if not source_range:
+                    continue
+
+                source_range = source_range.removeprefix("=")
+
+                try:
+                    response = (
+                        worksheet.spreadsheet.values_get(
+                            source_range
+                        )
+                    )
+                except Exception:
+                    continue
+
+                for row in response.get("values") or []:
+                    for cell_value in row:
+                        option = texto(cell_value)
+
+                        if option:
+                            result.append(option)
+
+        else:
+            return []
+
+        # Evitar que una opcion repetida en el rango produzca ambiguedad.
+        unique = []
+        seen = set()
+
+        for option in result:
+            key = normalizar(option)
+
+            if key and key not in seen:
+                unique.append(option)
+                seen.add(key)
+
+        return unique
 
     except Exception:
-        # Si Google no devuelve los metadatos, se utiliza
-        # el listado local como alternativa.
+        # Si Google no devuelve metadatos, el llamador conserva el nombre
+        # exacto que ya fue validado contra Productos.
         return []
 
 
@@ -912,30 +902,19 @@ def modelo_dropdown_exacto(
 
     requested_normalized = normalizar(requested)
 
+    # No bloquear una venta solo porque Google no haya devuelto los metadatos
+    # del desplegable. El modelo ya fue resuelto en la hoja Productos.
+    if not options:
+        return requested
+
     # Primero se compara contra las opciones reales de la hoja.
     for option in options:
         if normalizar(option) == requested_normalized:
             return option
 
-    # También permite encontrar una opción aunque difiera
-    # levemente en espacios, guiones o mayúsculas.
-    for option in options:
-        option_normalized = normalizar(option)
-
-        if (
-            requested_normalized in option_normalized
-            or option_normalized in requested_normalized
-        ):
-            return option
-
-    # Alternativa basada en el listado enviado por el usuario.
-    for option in MODELOS_VENTAS:
-        if normalizar(option) == requested_normalized:
-            return option
-
     raise BusinessError(
         f"El modelo {requested!r} no coincide con ninguna "
-        "opción del desplegable de la columna Vape."
+        "opción actual del desplegable de la columna Vape en Google Sheets."
     )
 
 

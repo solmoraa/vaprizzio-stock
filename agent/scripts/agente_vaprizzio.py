@@ -46,92 +46,6 @@ from app.order_sync_v2 import (  # noqa: E402
 from app.tools import buscar_orden  # noqa: E402
 
 
-MODEL_ALIASES = {
-    # Elfbar
-    "elfbar ice king": "Elfbar Ice King 40k",
-    "ice king": "Elfbar Ice King 40k",
-    "ice king 40k": "Elfbar Ice King 40k",
-    "elfbar ice king 40k": "Elfbar Ice King 40k",
-
-    "elfbar 15k": "Elfbar BC 15k",
-    "elfbar bc 15k": "Elfbar BC 15k",
-    "bc 15k": "Elfbar BC 15k",
-
-    "elfbar te30k": "Elfbar TE30K",
-    "elfbar te 30k": "Elfbar TE30K",
-    "te30k": "Elfbar TE30K",
-    "te 30k": "Elfbar TE30K",
-
-    "elfbar bc pro": "Elfbar Create BC pro 40k",
-    "elfbar bc pro 40k": "Elfbar Create BC pro 40k",
-    "bc pro": "Elfbar Create BC pro 40k",
-    "bc pro 40k": "Elfbar Create BC pro 40k",
-    "create bc pro": "Elfbar Create BC pro 40k",
-
-    "elfbar pro 45k": "Elfbar pro 45K",
-    "pro 45k": "Elfbar pro 45K",
-
-    "elfbar summer": "Elfbar Summer",
-
-    # Ignite
-    "ignite nano": "Ignite v-nano",
-    "ignite v nano": "Ignite v-nano",
-    "ignite v-nano": "Ignite v-nano",
-    "v nano": "Ignite v-nano",
-
-    "ignite v155": "Ignite v155",
-    "ignite 155": "Ignite v155",
-    "v155": "Ignite v155",
-
-    "ignite v250": "Ignite v250",
-    "ignite 250": "Ignite v250",
-    "v250": "Ignite v250",
-
-    "ignite v300": "Ignite v300 slim",
-    "ignite v300 slim": "Ignite v300 slim",
-    "v300": "Ignite v300 slim",
-    "v300 slim": "Ignite v300 slim",
-
-    # Otros - Lost Mary MO y Mixer son modelos diferentes.
-    "lost mary mo 5k": "Lost Mary MO 5k",
-    "lost mary mo5k": "Lost Mary MO 5k",
-    "lost mary mo": "Lost Mary MO 5k",
-    "mary mo": "Lost Mary MO 5k",
-
-    "lost mary mixer 30k": "Lost Mary Mixer 30k",
-    "lost mary mixer": "Lost Mary Mixer 30k",
-    "mixer 30k": "Lost Mary Mixer 30k",
-    "mixer": "Lost Mary Mixer 30k",
-
-    # Solo se usa cuando no se indicó MO ni Mixer.
-    "lost mary": "Lost Mary Mixer 30k",
-
-    "geek bar": "Geek Bar Pulse X",
-    "geek bar pulse x": "Geek Bar Pulse X",
-    "pulse x": "Geek Bar Pulse X",
-
-    "blvk": "BLVK",
-
-    "airmez": "Airmez Bluetooth 40k (Vape con Auriculares)",
-    "airmez 40k": "Airmez Bluetooth 40k (Vape con Auriculares)",
-    "airmez auris": "Airmez Bluetooth 40k (Vape con Auriculares)",
-    "airmez bluetooth": "Airmez Bluetooth 40k (Vape con Auriculares)",
-
-    "maskking": "Maskking Extre 100K",
-    "maskking 100k": "Maskking Extre 100K",
-    "maskking100k": "Maskking Extre 100K",
-    "maskking extre": "Maskking Extre 100K",
-    "maskking extreme": "Maskking Extre 100K",
-    "maskking extreme 100k": "Maskking Extre 100K",
-    "maskking extre 100k": "Maskking Extre 100K",
-    "masking": "Maskking Extre 100K",
-    "masking 100k": "Maskking Extre 100K",
-
-    "dummy": "Dummy 8k",
-    "dummy 8k": "Dummy 8k",
-}
-
-
 def limpiar_texto_modelo(value: Any) -> str:
     import re
     import unicodedata
@@ -196,36 +110,6 @@ def normalizar_modelo(value: Any) -> Any:
     return exact_aliases.get(key, original)
 
 
-def validar_familia_modelo(value: Any) -> None:
-    """
-    Evita equivalencias peligrosas entre marcas distintas.
-    """
-    normalized = limpiar_texto_modelo(value)
-
-    families = {
-        "elfbar": ("elfbar", "ice king", "te30k", "te 30k", "bc pro"),
-        "geekbar": ("geek bar", "geekbar", "pulse x"),
-        "ignite": ("ignite", "v155", "v250", "v300", "v nano"),
-        "lostmary": ("lost mary", "mixer"),
-        "airmez": ("airmez",),
-        "maskking": ("maskking",),
-    }
-
-    detected = []
-
-    for family, tokens in families.items():
-        if any(token in normalized for token in tokens):
-            detected.append(family)
-
-    if len(set(detected)) > 1:
-        raise BusinessError(
-            f"El modelo {value!r} mezcla marcas incompatibles. "
-            "Indicá un único modelo."
-        )
-
-
-
-
 def normalizar_productos(
     productos: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -250,9 +134,7 @@ def normalizar_productos(
         )
 
         if modelo:
-            validar_familia_modelo(modelo)
             modelo_normalizado = normalizar_modelo(modelo)
-            validar_familia_modelo(modelo_normalizado)
             nuevo["marca"] = modelo_normalizado
 
             # Evita enviar campos alternativos contradictorios.

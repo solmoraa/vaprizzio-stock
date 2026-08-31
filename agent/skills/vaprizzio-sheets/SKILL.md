@@ -77,6 +77,16 @@ Si falta, preguntar:
 No ejecutar el script hasta obtener la plataforma.
 Nunca inventar WhatsApp, Instagram, Tienda Nube, Mercado Libre ni otra opción.
 
+También cuentan como confirmación explícita frases como:
+
+- me habló por WhatsApp
+- me escribió por Instagram
+- me contactó por Messenger
+- la venta fue por Tienda Nube
+
+En esos casos no volver a preguntar el medio y enviar
+`"plataforma_confirmada":true`.
+
 El estado no es un dato obligatorio. Cuando no se indique, usar `Entregado`.
 
 ## Ubicación de las ventas
@@ -108,30 +118,6 @@ Antes de ejecutar `registrar-venta`:
 
 El estado sigue siendo `Entregado` cuando no se indique otro.
 
-## Separación entre plataforma y forma de pago
-
-No confundir el canal de venta con la forma de pago.
-
-Ejemplo:
-
-"por un amigo en efectivo"
-
-Debe ejecutarse como:
-
---plataforma "Amigo"
---forma-pago "EFECTIVO"
-
-Nunca usar "Transferencia" si el usuario dijo "efectivo".
-
-Antes de ejecutar `registrar-venta`, convertir la forma de pago a mayúsculas.
-
-Ejemplos:
-
-efectivo → EFECTIVO
-mercado pago → MERCADO PAGO FABRI
-falta pagar → FALTA PAGAR
-mitad efectivo y mitad mercado pago →
-EFECTIVO + MERCADO PAGO FABRI
 
 ## Separación entre plataforma y forma de pago
 

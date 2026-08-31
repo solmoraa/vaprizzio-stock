@@ -9,10 +9,10 @@ mensajes de WhatsApp, Instagram o Messenger.
 
 ## Estructura
 
-- `deploy/install-vaprizziobot-sale-platform-fix.sh`: valida plataforma y forma
-  de pago, evita intentos duplicados y agrega la corrección de plataforma.
-- `deploy/install-vaprizziobot-dynamic-catalog-fix.sh`: evita listas estáticas
-  de modelos y permite modelos y sabores nuevos del Excel.
+- `agent/`: fuente versionada del agente administrativo, sus scripts, reglas,
+  skill y módulo de Tiendanube/Google Sheets.
+- `deploy/install-vaprizziobot-source.sh`: instala de forma controlada la fuente
+  corregida en el workspace activo y crea un respaldo privado.
 - `deploy/vaprizziobot/`: scripts que se instalan o aplican sobre el workspace
   administrativo del servidor.
 - `deploy/openclaw-telegram-watchdog.*`: vigilancia y recuperación del canal de
@@ -54,11 +54,10 @@ git pull --ff-only origin main
 python3 -m unittest discover -s tests -v
 ```
 
-Aplicar las correcciones del agente administrativo:
+Aplicar la versión corregida del agente administrativo:
 
 ```bash
-bash deploy/install-vaprizziobot-sale-platform-fix.sh
-bash deploy/install-vaprizziobot-dynamic-catalog-fix.sh
+bash deploy/install-vaprizziobot-source.sh
 ```
 
 Auditar todos los modelos y sabores visibles en Google Sheets con una sola

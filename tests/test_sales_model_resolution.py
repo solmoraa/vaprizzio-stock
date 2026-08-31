@@ -1,0 +1,191 @@
+from __future__ import annotations
+
+import ast
+import unittest
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SALES = ROOT / "agent" / "tiendanube" / "app" / "business" / "sales.py"
+AGENT = ROOT / "agent" / "scripts" / "agente_vaprizzio.py"
+PROMPT = ROOT / "agent" / "AGENTS.md"
+SKILL = ROOT / "agent" / "skills" / "vaprizzio-sheets" / "SKILL.md"
+INSTALLER = ROOT / "deploy" / "install-vaprizziobot-source.sh"
+
+
+class BusinessError(Exception):
+    pass
+
+
+def texto(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def normalizar(value: Any) -> str:
+    return " ".join(texto(value).casefold().replace("-", " ").split())
+
+
+def columna_a_letra(number: int) -> str:
+    return chr(64 + number)
+
+
+def load_resolution_functions() -> dict[str, Any]:
+    tree = ast.parse(SALES.read_text(encoding="utf-8"))
+    wanted = {
+        "ALIAS_MODELOS",
+        "modelo_para_ventas",
+        "opciones_dropdown_celda",
+        "modelo_dropdown_exacto",
+    }
+    nodes = []
+
+    for node in tree.body:
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            names = {
+                target.id
+                for target in (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                if isinstance(target, ast.Name)
+            }
+            if names & wanted:
+                nodes.append(node)
+        elif isinstance(node, ast.FunctionDef) and node.name in wanted:
+            nodes.append(node)
+
+    namespace = {
+        "Any": Any,
+        "BusinessError": BusinessError,
+        "texto": texto,
+        "normalizar": normalizar,
+        "columna_a_letra": columna_a_letra,
+    }
+    module = ast.Module(body=nodes, type_ignores=[])
+    exec(compile(module, str(SALES), "exec"), namespace)
+    return namespace
+
+
+class SpreadsheetFixture:
+    def __init__(self, *, condition: str, values: list[dict[str, str]], rows=None):
+        self.condition = condition
+        self.condition_values = values
+        self.rows = rows or []
+        self.requested_ranges: list[str] = []
+
+    def fetch_sheet_metadata(self, params):
+        return {
+            "sheets": [{
+                "data": [{
+                    "rowData": [{
+                        "values": [{
+                            "dataValidation": {
+                                "condition": {
+                                    "type": self.condition,
+                                    "values": self.condition_values,
+                                }
+                            }
+                        }]
+                    }]
+                }]
+            }]
+        }
+
+    def values_get(self, source_range):
+        self.requested_ranges.append(source_range)
+        return {"values": self.rows}
+
+
+class WorksheetFixture:
+    title = "Ventas Agosto"
+
+    def __init__(self, spreadsheet):
+        self.spreadsheet = spreadsheet
+
+
+class SalesModelResolutionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.namespace = load_resolution_functions()
+
+    def test_new_models_are_not_blocked_or_fuzzily_replaced(self) -> None:
+        resolve = self.namespace["modelo_para_ventas"]
+        self.assertEqual(resolve("Lost Mary Dura"), "Lost Mary Dura")
+        self.assertEqual(resolve("Lost Mary Galaxy 90k"), "Lost Mary Galaxy 90k")
+        self.assertNotEqual(resolve("Lost Mary Dura"), "Lost Mary Mixer 30k")
+
+    def test_only_exact_legacy_equivalences_are_applied(self) -> None:
+        resolve = self.namespace["modelo_para_ventas"]
+        self.assertEqual(resolve("Elfbar BC 15k"), "Elfbar 15K")
+        self.assertEqual(resolve("Elfbar Ice King 40k"), "Elfbar Ice king")
+
+    def test_dropdown_options_can_come_from_a_sheet_range(self) -> None:
+        spreadsheet = SpreadsheetFixture(
+            condition="ONE_OF_RANGE",
+            values=[{"userEnteredValue": "Catalogo!A2:A"}],
+            rows=[["Lost Mary Mixer 30k"], ["Lost Mary Dura"], ["Lost Mary Dura"]],
+        )
+        worksheet = WorksheetFixture(spreadsheet)
+        exact = self.namespace["modelo_dropdown_exacto"](
+            worksheet,
+            2,
+            4,
+            "Lost Mary Dura",
+        )
+        self.assertEqual(exact, "Lost Mary Dura")
+        self.assertEqual(spreadsheet.requested_ranges, ["Catalogo!A2:A"])
+
+    def test_missing_dropdown_metadata_does_not_reject_catalog_model(self) -> None:
+        spreadsheet = SpreadsheetFixture(condition="CUSTOM_FORMULA", values=[])
+        worksheet = WorksheetFixture(spreadsheet)
+        exact = self.namespace["modelo_dropdown_exacto"](
+            worksheet,
+            2,
+            4,
+            "Lost Mary Dura",
+        )
+        self.assertEqual(exact, "Lost Mary Dura")
+
+    def test_dropdown_never_uses_partial_model_matching(self) -> None:
+        spreadsheet = SpreadsheetFixture(
+            condition="ONE_OF_LIST",
+            values=[{"userEnteredValue": "Lost Mary Mixer 30k"}],
+        )
+        worksheet = WorksheetFixture(spreadsheet)
+        with self.assertRaises(BusinessError):
+            self.namespace["modelo_dropdown_exacto"](
+                worksheet,
+                2,
+                4,
+                "Lost Mary",
+            )
+
+    def test_stale_conflicting_lists_were_removed(self) -> None:
+        sales_source = SALES.read_text(encoding="utf-8")
+        agent_source = AGENT.read_text(encoding="utf-8")
+        self.assertNotIn("MODELOS_VENTAS", sales_source)
+        self.assertNotIn("get_close_matches", sales_source)
+        self.assertNotIn("MODEL_ALIASES =", agent_source)
+        self.assertNotIn('"lost mary": "Lost Mary Mixer 30k"', agent_source)
+        self.assertNotIn("def validar_familia_modelo", agent_source)
+
+    def test_explicit_contact_phrase_confirms_platform(self) -> None:
+        prompt = PROMPT.read_text(encoding="utf-8")
+        skill = SKILL.read_text(encoding="utf-8")
+        self.assertIn("me hablo\n  por WhatsApp", prompt)
+        self.assertIn("me habló por WhatsApp", skill)
+        self.assertEqual(skill.count("## Separación entre plataforma y forma de pago"), 1)
+        self.assertLess(len(prompt), 20_000)
+        self.assertLess(len(prompt.encode("utf-8")), 20_000)
+
+    def test_installer_only_targets_administrative_agent(self) -> None:
+        source = INSTALLER.read_text(encoding="utf-8")
+        self.assertIn("VAPRIZZIOBOT_TARGET", source)
+        self.assertIn('SOURCE_AGENT="$REPO_ROOT/agent"', source)
+        self.assertIn('SOURCE_SALES="$SOURCE_AGENT/tiendanube/app/business/sales.py"', source)
+        self.assertNotIn("chat-vaprizzio-test.service", source)
+        self.assertNotIn("extensions/vaprizzio-tools", source)
+
+
+if __name__ == "__main__":
+    unittest.main()
