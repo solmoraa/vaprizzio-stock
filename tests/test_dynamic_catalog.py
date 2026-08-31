@@ -85,11 +85,65 @@ class DynamicCatalogTests(unittest.TestCase):
             encoding="utf-8"
         )
         rules = (self.workspace / "AGENTS.md").read_text(encoding="utf-8")
-        self.assertEqual(agent.count("FIX CATALOGO DINAMICO VENTA 20260830"), 1)
-        self.assertEqual(rules.count("FIN FIX CATALOGO DINAMICO VENTA 20260830"), 1)
+        self.assertEqual(agent.count("FIX CATALOGO DINAMICO VENTA 20260831"), 1)
+        self.assertEqual(rules.count("FIN REGLAS CRITICAS VAP VENTA 20260831"), 1)
         self.assertIn("mensaje actual", rules)
         self.assertIn("No consultar stock antes", rules)
         self.assertIn("Lost Mary Dura", rules)
+        self.assertLess(len(rules), 20_000)
+        self.assertLess(len(rules.encode("utf-8")), 20_000)
+
+    def test_replaces_a_previously_marked_but_stale_normalizer(self) -> None:
+        self.patch()
+        path = self.workspace / "scripts" / "agente_vaprizzio.py"
+        stale = path.read_text(encoding="utf-8").replace(
+            'return exact_aliases.get(key, original)',
+            'return "Lost Mary Mixer 30k"',
+        )
+        path.write_text(stale, encoding="utf-8")
+        self.patch()
+        self.assertEqual(
+            self.load_agent().normalizar_modelo("Lost Mary Dura"),
+            "Lost Mary Dura",
+        )
+
+    def test_consolidates_previous_rule_blocks(self) -> None:
+        old = '''
+<!-- INICIO FIX PLATAFORMA VENTA 20260813 -->viejo<!-- FIN FIX PLATAFORMA VENTA 20260813 -->
+<!-- INICIO FIX REGISTRO VENTA 20260814 -->viejo<!-- FIN FIX REGISTRO VENTA 20260814 -->
+<!-- INICIO FIX CATALOGO DINAMICO VENTA 20260830 -->viejo<!-- FIN FIX CATALOGO DINAMICO VENTA 20260830 -->
+
+## Interpretación de plataforma y forma de pago
+regla conservada
+
+## Mayúsculas en forma de pago
+regla conservada
+
+## Interpretación de plataforma y forma de pago
+copia redundante
+
+## Mayúsculas en forma de pago
+copia redundante
+
+## Alias de modelos
+- `Lost Mary` → `Lost Mary Mixer`
+- `Ice King` → `Elfbar Ice King 40k`
+'''
+        agents = self.workspace / "AGENTS.md"
+        agents.write_text("# agente\n" + old, encoding="utf-8")
+        self.patch()
+        rules = agents.read_text(encoding="utf-8")
+        self.assertNotIn("20260813", rules)
+        self.assertNotIn("20260814", rules)
+        self.assertNotIn("20260830", rules)
+        self.assertEqual(rules.count("INICIO REGLAS CRITICAS VAP VENTA 20260831"), 1)
+        self.assertEqual(
+            rules.count("## Interpretación de plataforma y forma de pago"),
+            1,
+        )
+        self.assertEqual(rules.count("## Mayúsculas en forma de pago"), 1)
+        self.assertNotIn("`Lost Mary` → `Lost Mary Mixer`", rules)
+        self.assertIn("`Ice King` → `Elfbar Ice King 40k`", rules)
 
     def test_validator_reviews_new_models_and_flavors_in_one_batch(self) -> None:
         self.patch()
@@ -115,7 +169,18 @@ def consultar_stock(marca=None, sabor=None, solo_disponibles=False):
         deployed = self.workspace / "scripts" / "validar_catalogo_venta.py"
         shutil.copyfile(VALIDATOR, deployed)
         output = subprocess.check_output(
-            [sys.executable, str(deployed)], text=True, encoding="utf-8"
+            [
+                sys.executable,
+                str(deployed),
+                "--modelo",
+                "Lost Mary Dura",
+                "--sabor",
+                "Blueberry Watermelon",
+                "--sabor",
+                "Nuevo Sabor Futuro",
+            ],
+            text=True,
+            encoding="utf-8",
         )
         result = json.loads(output)
         self.assertEqual(
@@ -136,6 +201,12 @@ def consultar_stock(marca=None, sabor=None, solo_disponibles=False):
         )
         self.assertEqual(result["modelos_alterados_por_alias"], [])
         self.assertEqual(result["combinaciones_duplicadas"], [])
+        self.assertTrue(result["agents_md"]["menor_a_20000"])
+        self.assertEqual(
+            result["prueba_solicitada"]["modelo_catalogo"],
+            "Lost Mary Dura",
+        )
+        self.assertEqual(len(result["prueba_solicitada"]["sabores"]), 2)
 
     def test_installer_is_isolated_from_commercial_chat(self) -> None:
         source = INSTALLER.read_text(encoding="utf-8")
@@ -158,6 +229,27 @@ def consultar_stock(marca=None, sabor=None, solo_disponibles=False):
             "append_row",
         ):
             self.assertNotIn(forbidden, source)
+
+    def test_prompt_over_limit_fails_without_partial_writes(self) -> None:
+        agents = self.workspace / "AGENTS.md"
+        agents.write_text("x" * 20_000, encoding="utf-8")
+        original_agent = (
+            self.workspace / "scripts" / "agente_vaprizzio.py"
+        ).read_text(encoding="utf-8")
+        completed = subprocess.run(
+            [sys.executable, str(PATCHER), str(self.workspace)],
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertEqual(agents.read_text(encoding="utf-8"), "x" * 20_000)
+        self.assertEqual(
+            (self.workspace / "scripts" / "agente_vaprizzio.py").read_text(
+                encoding="utf-8"
+            ),
+            original_agent,
+        )
 
 
 if __name__ == "__main__":

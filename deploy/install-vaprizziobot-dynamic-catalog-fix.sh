@@ -32,7 +32,8 @@ install -m 700 \
   "$TARGET/scripts/agente_vaprizzio.py" \
   "$TARGET/scripts/validar_catalogo_venta.py"
 
-# Prueba local del normalizador. No importa modulos de Google ni toca la hoja.
+# Prueba local del normalizador y del limite del prompt. No importa modulos de
+# Google ni toca la hoja.
 "$TARGET/.venv/bin/python" - "$TARGET/scripts/agente_vaprizzio.py" <<'PY'
 import ast
 import json
@@ -59,7 +60,20 @@ assert all(normalize(value) == wanted for value, wanted in cases.items())
 print(json.dumps({"ok": True, "autoprueba_modelos": len(cases)}))
 PY
 
+PROMPT_BYTES="$(wc -c < "$TARGET/AGENTS.md")"
+PROMPT_CHARS="$({
+  "$TARGET/.venv/bin/python" - "$TARGET/AGENTS.md" <<'PY'
+from pathlib import Path
+import sys
+print(len(Path(sys.argv[1]).read_text(encoding="utf-8")))
+PY
+})"
+test "$PROMPT_BYTES" -lt 20000
+test "$PROMPT_CHARS" -lt 20000
+
 printf 'Correccion del catalogo dinamico instalada.\n'
 printf 'Backup privado: %s\n' "$BACKUP"
+printf 'AGENTS.md: %s caracteres, %s bytes UTF-8 (limite exclusivo: 20000).\n' \
+  "$PROMPT_CHARS" "$PROMPT_BYTES"
 printf 'No se modificaron ventas, stock ni el agente comercial multicanal.\n'
 printf 'Ejecute ahora la validacion de solo lectura indicada en la salida final.\n'

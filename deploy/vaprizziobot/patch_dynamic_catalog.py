@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
 
-PATCH_MARKER = "FIX CATALOGO DINAMICO VENTA 20260830"
+PATCH_MARKER = "FIX CATALOGO DINAMICO VENTA 20260831"
+PROMPT_LIMIT = 20_000
 
 NORMALIZER_SOURCE = '''def normalizar_modelo(value: Any) -> Any:
     """Normaliza solo alias exactos; los modelos del catalogo son dinamicos."""
@@ -54,7 +56,11 @@ NORMALIZER_SOURCE = '''def normalizar_modelo(value: Any) -> Any:
         "ignite 300": "Ignite v300 slim",
         "v300": "Ignite v300 slim",
         "pulse x": "Geek Bar Pulse X",
+        "geek bar": "Geek Bar Pulse X",
         "geek bar pulse x": "Geek Bar Pulse X",
+        "airmez": "Airmez Bluetooth 40k (Vape con Auriculares)",
+        "maskking": "Maskking Extre 100K",
+        "dummy": "Dummy 8k",
     }
 
     return exact_aliases.get(key, original)
@@ -63,49 +69,100 @@ NORMALIZER_SOURCE = '''def normalizar_modelo(value: Any) -> Any:
 
 AGENT_RULES = r'''
 
-<!-- INICIO FIX CATALOGO DINAMICO VENTA 20260830 -->
-## Modelos y sabores dinamicos para registrar ventas
+<!-- INICIO REGLAS CRITICAS VAP VENTA 20260831 -->
+## Ventas administrativas: reglas criticas
 
-- Estas reglas pertenecen exclusivamente al agente administrativo de Telegram.
-- Para una venta, tomar el modelo y el sabor del mensaje actual. Si el usuario
-  los nombra, nunca reutilizar un modelo o sabor de una conversacion anterior.
-- Los modelos y sabores se leen de Google Sheets y pueden cambiar sin modificar
-  el agente. Pasar sus nombres completos tal como los escribio el usuario.
-- Aplicar alias solamente cuando todo el nombre recibido sea una abreviatura
-  exacta y no ambigua. Nunca aplicar un alias por coincidencia parcial.
-- En particular, `Lost Mary Dura`, `Lost Mary Mixer 30k` y cualquier futuro
-  modelo `Lost Mary ...` son modelos distintos. `Lost Mary Dura` nunca se
-  convierte en `Lost Mary Mixer 30k`.
-- Un sabor nuevo no autoriza a sustituir el modelo por otro que tenga un sabor
-  parecido. La combinacion modelo + sabor debe conservarse.
-- Para registrar una venta ejecutar directamente una sola vez
-  `agente_vaprizzio.py registrar-venta`. No consultar stock antes: ese comando
-  ya lee el catalogo, valida stock, registra la venta y descuenta la cantidad.
-- Si devuelve `ok:false`, no volver a consultar la hoja ni repetir la venta en
-  ese turno. Informar solamente que la venta no fue registrada y el dato
-  comercial que el resultado indique que debe revisarse.
-- No mencionar al usuario nombres de scripts, JSON, dispatcher, filas, hojas,
-  limites de API ni diagnosticos internos.
-<!-- FIN FIX CATALOGO DINAMICO VENTA 20260830 -->
+- Solo aplica al agente administrativo de Telegram. No modifica el agente
+  comercial de WhatsApp, Instagram ni Messenger.
+- Para cada venta usar modelo, sabor, cantidades, cliente, plataforma y pago del
+  mensaje actual. No reutilizar esos datos desde mensajes o intentos anteriores.
+- Modelos y sabores son dinamicos: provienen de Google Sheets. Conservar el
+  nombre completo dado por el usuario y aplicar solo alias exactos no ambiguos.
+  Nunca transformar por coincidencia parcial. `Lost Mary Dura`, `Lost Mary
+  Mixer 30k` y futuros `Lost Mary ...` son productos diferentes.
+- `Lost Mary` sin el resto del modelo es ambiguo: preguntar cual es y no
+  convertirlo automaticamente en `Lost Mary Mixer 30k`.
+- Cada producto debe conservar su combinacion modelo + sabor; nunca sustituirlo
+  por otro modelo que tenga un sabor parecido.
+- La plataforma debe estar expresamente indicada. Si falta, preguntar solo
+  `¿Por qué medio realizaste la venta?`; no deducir venta presencial. Cuando
+  este confirmada enviar `"plataforma_confirmada":true`.
+- Usar la clave `forma_pago`. Efectivo se envia como `EFECTIVO`; no confundir
+  forma de pago con plataforma.
+- Registrar con una sola ejecucion de `agente_vaprizzio.py registrar-venta`.
+  No consultar stock antes y no repetir una venta que devolvio `ok:false`.
+- Ante `ok:false`, afirmar que no se registro nada e indicar solo el dato
+  comercial a revisar. No mostrar scripts, comandos, JSON, rutas, hojas, filas,
+  limites de API, dispatcher, trazas ni otros diagnosticos internos.
+- Para cambiar solo el canal de una venta existente usar una vez
+  `modificar-plataforma-venta`; no volver a registrar ni cambiar stock.
+<!-- FIN REGLAS CRITICAS VAP VENTA 20260831 -->
 '''
 
 
 TOOL_RULES = r'''
 
-<!-- INICIO TOOL CATALOGO DINAMICO VENTA 20260830 -->
-## Catalogo dinamico del registrador de ventas
+<!-- INICIO TOOL VAP VENTA 20260831 -->
+## Contrato administrativo de ventas
 
-`registrar-venta` recibe el modelo y el sabor actuales sin traducirlos mediante
-listas estaticas. El propio registro resuelve la combinacion contra Google
-Sheets. Los alias solo se aplican por igualdad exacta.
+`registrar-venta` recibe las claves `cliente`, `productos`, `plataforma`,
+`plataforma_confirmada` y `forma_pago`. Cada elemento de `productos` contiene
+`marca`, `sabor` y `cantidad`. Los nombres se resuelven contra el catalogo vivo;
+los alias solo se aplican por igualdad exacta. Una solicitud admite un intento.
+
+`modificar-plataforma-venta` requiere `orden` y `plataforma`; cambia solamente
+ese campo y nunca vuelve a registrar la venta.
 
 Validacion de solo lectura de todos los modelos y sabores visibles en la hoja:
 
 `/home/openclaw/.openclaw/workspace/vaprizziobot/.venv/bin/python /home/openclaw/.openclaw/workspace/vaprizziobot/scripts/validar_catalogo_venta.py`
 
-La validacion hace una sola lectura general y no modifica stock ni ventas.
-<!-- FIN TOOL CATALOGO DINAMICO VENTA 20260830 -->
+Para probar un caso concreto sin escribir:
+
+`/home/openclaw/.openclaw/workspace/vaprizziobot/.venv/bin/python /home/openclaw/.openclaw/workspace/vaprizziobot/scripts/validar_catalogo_venta.py --modelo "Lost Mary Dura" --sabor "Grape Ice" --sabor "Watermelon Ice"`
+
+Ambas validaciones hacen una sola lectura general y no modifican stock ni ventas.
+<!-- FIN TOOL VAP VENTA 20260831 -->
 '''
+
+
+OWNED_BLOCKS = (
+    (
+        "INICIO FIX PLATAFORMA VENTA 20260813",
+        "FIN FIX PLATAFORMA VENTA 20260813",
+    ),
+    (
+        "INICIO FIX REGISTRO VENTA 20260814",
+        "FIN FIX REGISTRO VENTA 20260814",
+    ),
+    (
+        "INICIO FIX CATALOGO DINAMICO VENTA 20260830",
+        "FIN FIX CATALOGO DINAMICO VENTA 20260830",
+    ),
+    (
+        "INICIO REGLAS CRITICAS VAP VENTA 20260831",
+        "FIN REGLAS CRITICAS VAP VENTA 20260831",
+    ),
+)
+
+OWNED_TOOL_BLOCKS = (
+    (
+        "INICIO TOOL MODIFICAR PLATAFORMA 20260813",
+        "FIN TOOL MODIFICAR PLATAFORMA 20260813",
+    ),
+    (
+        "INICIO TOOL REGISTRO VENTA 20260814",
+        "FIN TOOL REGISTRO VENTA 20260814",
+    ),
+    (
+        "INICIO TOOL CATALOGO DINAMICO VENTA 20260830",
+        "FIN TOOL CATALOGO DINAMICO VENTA 20260830",
+    ),
+    (
+        "INICIO TOOL VAP VENTA 20260831",
+        "FIN TOOL VAP VENTA 20260831",
+    ),
+)
 
 
 def replace_top_level_function(source: str, name: str, replacement: str) -> str:
@@ -137,6 +194,58 @@ def append_once(source: str, block: str, end_marker: str) -> str:
     newline = "\r\n" if "\r\n" in source else "\n"
     rendered = block.replace("\n", newline)
     return source.rstrip() + rendered + newline
+
+
+def remove_marked_blocks(
+    source: str,
+    markers: tuple[tuple[str, str], ...],
+) -> str:
+    """Quita solo bloques administrados por estos instaladores."""
+    for start, end in markers:
+        pattern = re.compile(
+            rf"\s*<!--\s*{re.escape(start)}\s*-->.*?"
+            rf"<!--\s*{re.escape(end)}\s*-->\s*",
+            re.DOTALL,
+        )
+        source = pattern.sub("\n\n", source)
+    return source.rstrip()
+
+
+def remove_duplicate_section(source: str, heading: str) -> str:
+    """Conserva la primera aparicion de una seccion Markdown repetida."""
+    pattern = re.compile(
+        rf"(?ms)^##\s+{re.escape(heading)}\s*\n.*?(?=^##\s+|\Z)"
+    )
+    matches = list(pattern.finditer(source))
+    for match in reversed(matches[1:]):
+        source = source[: match.start()] + source[match.end() :]
+    return source
+
+
+def compact_legacy_prompt(source: str) -> str:
+    # El prompt historico tenia estas dos secciones duplicadas textualmente.
+    # Se conserva su primera aparicion y se elimina solo la copia redundante.
+    for heading in (
+        "Interpretación de plataforma y forma de pago",
+        "Mayúsculas en forma de pago",
+    ):
+        source = remove_duplicate_section(source, heading)
+
+    # Esta regla estatica fue la causa del incidente: al existir ahora varios
+    # modelos Lost Mary, el nombre de familia ya no identifica a uno concreto.
+    source = re.sub(
+        r"(?mi)^\s*-\s*`Lost Mary`\s*(?:→|->)\s*`Lost Mary Mixer(?: 30k)?`\s*$\n?",
+        "",
+        source,
+    )
+    return source.rstrip()
+
+
+def prompt_size(source: str) -> dict[str, int]:
+    return {
+        "caracteres": len(source),
+        "bytes_utf8": len(source.encode("utf-8")),
+    }
 
 
 def validate_normalizer(source: str) -> None:
@@ -178,28 +287,51 @@ def patch_workspace(target: Path) -> dict[str, Any]:
             raise FileNotFoundError(f"No existe el archivo requerido: {path}")
 
     source = agent_script.read_text(encoding="utf-8")
-    if PATCH_MARKER not in source:
-        source = replace_top_level_function(
-            source,
-            "normalizar_modelo",
-            f"# {PATCH_MARKER}\n{NORMALIZER_SOURCE}",
-        )
+    # Se reemplaza siempre para reparar instalaciones parciales o versiones
+    # anteriores que ya tengan un marcador pero con una funcion desactualizada.
+    source = re.sub(
+        r"(?m)^# FIX CATALOGO DINAMICO VENTA \d+\r?\n",
+        "",
+        source,
+    )
+    source = replace_top_level_function(
+        source,
+        "normalizar_modelo",
+        f"# {PATCH_MARKER}\n{NORMALIZER_SOURCE}",
+    )
     ast.parse(source)
     validate_normalizer(source)
-    agent_script.write_text(source, encoding="utf-8")
 
     agent_text = append_once(
-        agents_md.read_text(encoding="utf-8"),
+        compact_legacy_prompt(
+            remove_marked_blocks(
+                agents_md.read_text(encoding="utf-8"),
+                OWNED_BLOCKS,
+            ),
+        ),
         AGENT_RULES,
-        "FIN FIX CATALOGO DINAMICO VENTA 20260830",
+        "FIN REGLAS CRITICAS VAP VENTA 20260831",
     )
-    agents_md.write_text(agent_text, encoding="utf-8")
+    size = prompt_size(agent_text)
+    if max(size.values()) >= PROMPT_LIMIT:
+        raise RuntimeError(
+            "AGENTS.md sigue excediendo el limite seguro despues de consolidar "
+            f"las reglas administradas: {size}. No se modifico el workspace."
+        )
 
     tools_text = append_once(
-        tools_md.read_text(encoding="utf-8"),
+        remove_marked_blocks(
+            tools_md.read_text(encoding="utf-8"),
+            OWNED_TOOL_BLOCKS,
+        ),
         TOOL_RULES,
-        "FIN TOOL CATALOGO DINAMICO VENTA 20260830",
+        "FIN TOOL VAP VENTA 20260831",
     )
+
+    # Escribir recien despues de que todas las validaciones hayan pasado evita
+    # dejar una instalacion a medias si el prompt base ya era demasiado grande.
+    agent_script.write_text(source, encoding="utf-8")
+    agents_md.write_text(agent_text, encoding="utf-8")
     tools_md.write_text(tools_text, encoding="utf-8")
 
     return {
@@ -207,6 +339,8 @@ def patch_workspace(target: Path) -> dict[str, Any]:
         "target": str(target),
         "normalizacion": "alias exactos y catalogo dinamico",
         "autopruebas": 6,
+        "agents_md": size,
+        "limite_exclusivo": PROMPT_LIMIT,
     }
 
 

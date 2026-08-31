@@ -69,6 +69,20 @@ lectura y sin modificar ventas ni stock:
   /home/openclaw/.openclaw/workspace/vaprizziobot/scripts/validar_catalogo_venta.py
 ```
 
+Verificar específicamente el caso reportado, también en modo de solo lectura:
+
+```bash
+/home/openclaw/.openclaw/workspace/vaprizziobot/.venv/bin/python \
+  /home/openclaw/.openclaw/workspace/vaprizziobot/scripts/validar_catalogo_venta.py \
+  --modelo "Lost Mary Dura" \
+  --sabor "Grape Ice" \
+  --sabor "Watermelon Ice"
+```
+
+La salida confirma el nombre canónico encontrado en la hoja, ambos sabores y
+el tamaño de `AGENTS.md`. El instalador consolida las reglas que administra y
+se niega a dejar el prompt con 20.000 caracteres/bytes o más.
+
 Reiniciar el runtime compartido para que el agente vuelva a cargar sus reglas:
 
 ```bash
