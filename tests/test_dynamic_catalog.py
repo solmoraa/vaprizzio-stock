@@ -208,6 +208,53 @@ def consultar_stock(marca=None, sabor=None, solo_disponibles=False):
         )
         self.assertEqual(len(result["prueba_solicitada"]["sabores"]), 2)
 
+    def test_validator_understands_nested_product_variants(self) -> None:
+        self.patch()
+        business = self.workspace / "tiendanube" / "app" / "business"
+        business.mkdir(parents=True)
+        for package in (
+            self.workspace / "tiendanube" / "__init__.py",
+            self.workspace / "tiendanube" / "app" / "__init__.py",
+            business / "__init__.py",
+        ):
+            package.write_text("", encoding="utf-8")
+        (business / "products.py").write_text(
+            '''
+def consultar_stock(marca=None, sabor=None, solo_disponibles=False):
+    return {"productos": [{
+        "nombre": "Lost Mary Dura",
+        "variantes": [
+            {"name": "Grape Ice", "stock": 3},
+            {"name": "Watermelon Ice", "stock": 4},
+        ],
+    }]}
+''',
+            encoding="utf-8",
+        )
+        deployed = self.workspace / "scripts" / "validar_catalogo_venta.py"
+        shutil.copyfile(VALIDATOR, deployed)
+        output = subprocess.check_output(
+            [
+                sys.executable,
+                str(deployed),
+                "--modelo",
+                "Lost Mary Dura",
+                "--sabor",
+                "Grape Ice",
+                "--sabor",
+                "Watermelon Ice",
+            ],
+            text=True,
+            encoding="utf-8",
+        )
+        result = json.loads(output)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["filas_revisadas"], 2)
+        self.assertEqual(
+            result["prueba_solicitada"]["modelo_catalogo"],
+            "Lost Mary Dura",
+        )
+
     def test_installer_is_isolated_from_commercial_chat(self) -> None:
         source = INSTALLER.read_text(encoding="utf-8")
         self.assertIn("VAPRIZZIOBOT_TARGET", source)

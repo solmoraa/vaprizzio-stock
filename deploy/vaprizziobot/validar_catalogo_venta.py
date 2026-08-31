@@ -37,17 +37,69 @@ def first(row: dict[str, Any], *names: str) -> Any:
     return None
 
 
-def collect_rows(value: Any, found: list[tuple[str, str]]) -> None:
+def combine_model(row: dict[str, Any]) -> Any:
+    brand = first(row, "marca", "brand")
+    model = first(row, "modelo", "model")
+    product = first(
+        row,
+        "producto",
+        "product",
+        "nombre producto",
+        "product name",
+    )
+    if product not in (None, ""):
+        return product
+    if brand not in (None, "") and model not in (None, ""):
+        brand_text = str(brand).strip()
+        model_text = str(model).strip()
+        if key(model_text) in key(brand_text):
+            return brand_text
+        if key(brand_text) in key(model_text):
+            return model_text
+        return f"{brand_text} {model_text}"
+    return model or brand
+
+
+def collect_rows(
+    value: Any,
+    found: list[tuple[str, str]],
+    inherited_model: str | None = None,
+) -> None:
     if isinstance(value, dict):
-        model = first(value, "modelo", "marca", "producto", "nombre")
-        flavor = first(value, "sabor", "gusto", "variante")
+        explicit_model = combine_model(value)
+        generic_name = first(value, "nombre", "name")
+        flavor = first(
+            value,
+            "sabor",
+            "gusto",
+            "variante",
+            "variant name",
+            "nombre variante",
+        )
+        model = explicit_model or inherited_model
+        if model in (None, "") and flavor not in (None, ""):
+            model = generic_name
+        elif inherited_model and explicit_model in (None, "") and flavor in (None, ""):
+            # En algunas respuestas de Tiendanube la variante solo trae `name`.
+            flavor = generic_name
         if model not in (None, "") and flavor not in (None, ""):
             found.append((str(model).strip(), str(flavor).strip()))
+        child_model = (
+            str(explicit_model).strip()
+            if explicit_model not in (None, "")
+            else (
+                str(generic_name).strip()
+                if inherited_model is None
+                and generic_name not in (None, "")
+                and flavor in (None, "")
+                else inherited_model
+            )
+        )
         for child in value.values():
-            collect_rows(child, found)
+            collect_rows(child, found, child_model)
     elif isinstance(value, (list, tuple)):
         for child in value:
-            collect_rows(child, found)
+            collect_rows(child, found, inherited_model)
 
 
 def read_catalog_once() -> Any:
