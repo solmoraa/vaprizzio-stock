@@ -12,7 +12,8 @@ mensajes de WhatsApp, Instagram o Messenger.
 - `agent/`: fuente versionada del agente administrativo, sus scripts, reglas,
   skill y módulo de Tiendanube/Google Sheets.
 - `deploy/install-vaprizziobot-source.sh`: instala de forma controlada la fuente
-  corregida en el workspace activo y crea un respaldo privado.
+  corregida en el workspace activo, repara la resolución de variantes/stock y
+  crea un respaldo privado.
 - `deploy/vaprizziobot/`: scripts que se instalan o aplican sobre el workspace
   administrativo del servidor.
 - `deploy/openclaw-telegram-watchdog.*`: vigilancia y recuperación del canal de

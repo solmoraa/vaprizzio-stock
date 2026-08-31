@@ -9,18 +9,20 @@ BACKUP="${BACKUP_ROOT}/vaprizziobot-source-${STAMP}"
 
 SOURCE_AGENT="$REPO_ROOT/agent"
 SOURCE_SALES="$SOURCE_AGENT/tiendanube/app/business/sales.py"
+SOURCE_SYNC="$SOURCE_AGENT/tiendanube/app/sync_core.py"
 SOURCE_SCRIPT="$SOURCE_AGENT/scripts/agente_vaprizzio.py"
 SOURCE_PROMPT="$SOURCE_AGENT/AGENTS.md"
 SOURCE_SKILL="$SOURCE_AGENT/skills/vaprizzio-sheets/SKILL.md"
 
 TARGET_SALES="$TARGET/tiendanube/app/business/sales.py"
+TARGET_SYNC="$TARGET/tiendanube/app/sync_core.py"
 TARGET_SCRIPT="$TARGET/scripts/agente_vaprizzio.py"
 TARGET_PROMPT="$TARGET/AGENTS.md"
 TARGET_SKILL="$TARGET/skills/vaprizzio-sheets/SKILL.md"
 
 for path in \
-  "$SOURCE_SALES" "$SOURCE_SCRIPT" "$SOURCE_PROMPT" "$SOURCE_SKILL" \
-  "$TARGET_SALES" "$TARGET_SCRIPT" "$TARGET_PROMPT" "$TARGET_SKILL"; do
+  "$SOURCE_SALES" "$SOURCE_SYNC" "$SOURCE_SCRIPT" "$SOURCE_PROMPT" "$SOURCE_SKILL" \
+  "$TARGET_SALES" "$TARGET_SYNC" "$TARGET_SCRIPT" "$TARGET_PROMPT" "$TARGET_SKILL"; do
   test -f "$path"
 done
 test -x "$TARGET/.venv/bin/python"
@@ -41,17 +43,20 @@ mkdir -p \
   "$BACKUP/tiendanube/app/business" \
   "$BACKUP/skills/vaprizzio-sheets"
 cp -a "$TARGET_SALES" "$BACKUP/tiendanube/app/business/sales.py"
+cp -a "$TARGET_SYNC" "$BACKUP/tiendanube/app/sync_core.py"
 cp -a "$TARGET_SCRIPT" "$BACKUP/scripts/agente_vaprizzio.py"
 cp -a "$TARGET_PROMPT" "$BACKUP/AGENTS.md"
 cp -a "$TARGET_SKILL" "$BACKUP/skills/vaprizzio-sheets/SKILL.md"
 
 install -m 600 "$SOURCE_SALES" "$TARGET_SALES"
+install -m 600 "$SOURCE_SYNC" "$TARGET_SYNC"
 install -m 700 "$SOURCE_SCRIPT" "$TARGET_SCRIPT"
 install -m 600 "$SOURCE_PROMPT" "$TARGET_PROMPT"
 install -m 600 "$SOURCE_SKILL" "$TARGET_SKILL"
 
 "$TARGET/.venv/bin/python" -m py_compile \
   "$TARGET_SALES" \
+  "$TARGET_SYNC" \
   "$TARGET_SCRIPT"
 
 # Autoprueba determinista y sin escrituras en Google Sheets.

@@ -643,10 +643,8 @@ def stock_payload_for_variant(
     """
     Construye el payload de stock usando inventory_levels.
 
-    - Si se indicó Location ID, actualiza solamente esa ubicación.
-    - Si la variante tiene una única ubicación, usa esa ubicación.
-    - Si hay varias ubicaciones y no se puede determinar cuál usar,
-      detiene la operación para no modificar stock incorrecto.
+    Usa una Location ID real de la variante. Tolera que una sincronizacion
+    antigua haya guardado varias IDs separadas por comas.
     """
     if stock < 0:
         raise SyncError(
@@ -655,42 +653,12 @@ def stock_payload_for_variant(
 
     levels = variant.get("inventory_levels") or []
 
-    if selected_location:
-        selected_location = str(selected_location).strip()
-
-        matching = [
-            level
-            for level in levels
-            if str(level.get("location_id") or "").strip()
-            == selected_location
-        ]
-
-        if levels and not matching:
-            available = ", ".join(
-                str(level.get("location_id"))
-                for level in levels
-                if level.get("location_id")
-            )
-
-            raise SyncError(
-                "La Location ID configurada no pertenece a "
-                "esta variante. "
-                f"Configurada: {selected_location}. "
-                f"Disponibles: {available or 'ninguna'}."
-            )
-
-        return {
-            "inventory_levels": [
-                {
-                    "location_id": selected_location,
-                    "stock": stock,
-                }
-            ]
-        }
-
-    if len(levels) == 1:
-        level = levels[0]
-        location_id = level.get("location_id")
+    if levels:
+        location_id = _location_id_for_variation(
+            variant,
+            selected_location,
+            0,
+        )
 
         payload_level: dict[str, Any] = {
             "stock": stock,
@@ -707,24 +675,147 @@ def stock_payload_for_variant(
             ]
         }
 
-    if len(levels) > 1:
-        available = ", ".join(
-            str(level.get("location_id"))
-            for level in levels
-            if level.get("location_id")
-        )
-
-        raise SyncError(
-            "La variante tiene varias ubicaciones y la fila "
-            "de Productos no indica cuál debe modificarse. "
-            f"Location IDs disponibles: {available}."
-        )
-
     # Para variantes antiguas que todavía no devuelven
     # inventory_levels, Tiendanube conserva compatibilidad.
     return {
         "stock": stock,
     }
+
+
+def _location_id_for_variation(
+    variant: dict[str, Any],
+    selected_location: str | None,
+    variation: int,
+) -> str | None:
+    """Elige una ubicacion valida sin depender de IDs concatenados en Sheets.
+
+    La sincronizacion historica guardaba todas las ubicaciones separadas por
+    comas. Ese valor no es un Location ID valido y Tiendanube lo rechaza. Si no
+    hay una unica preferencia, se elige una ubicacion real de la variante. Para
+    descuentos se prioriza una que tenga stock suficiente.
+    """
+    levels = variant.get("inventory_levels") or []
+
+    if not levels:
+        return None
+
+    available = {
+        str(level.get("location_id") or "").strip(): level
+        for level in levels
+        if str(level.get("location_id") or "").strip()
+    }
+    configured = [
+        token
+        for token in re.split(
+            r"[,;\s]+",
+            str(selected_location or "").strip(),
+        )
+        if token in available
+    ]
+
+    if len(set(configured)) == 1:
+        return configured[0]
+
+    if variation < 0:
+        required = abs(variation)
+        sufficient = [
+            level
+            for level in levels
+            if (parse_int(level.get("stock")) or 0) >= required
+            and level.get("location_id")
+        ]
+
+        if sufficient:
+            return str(sufficient[0]["location_id"])
+
+        positive = [
+            level
+            for level in levels
+            if (parse_int(level.get("stock")) or 0) > 0
+            and level.get("location_id")
+        ]
+
+        if positive:
+            return str(positive[0]["location_id"])
+
+    first_location = levels[0].get("location_id")
+    return str(first_location) if first_location else None
+
+
+def _live_product_and_variant(
+    sheet_product: SheetProduct,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Resuelve y repara IDs usando modelo + sabor exactos.
+
+    Los IDs de Google Sheets son una cache. Si faltan o quedaron viejos, nunca
+    se debe concluir que el producto no existe: se consulta Tiendanube y se
+    selecciona una sola variante con coincidencia exacta. El SKU es opcional.
+    """
+    expected_model = normalize(sheet_product.marca)
+    expected_flavor = normalize(sheet_product.sabor)
+
+    if sheet_product.product_id and sheet_product.variant_id:
+        try:
+            product = get_product(sheet_product.product_id)
+            variant = get_variant(
+                sheet_product.product_id,
+                sheet_product.variant_id,
+            )
+            live_model = normalize(
+                localized_text(product.get("name"))
+            )
+            live_flavor = normalize(variant_flavor(variant))
+
+            if (
+                live_model == expected_model
+                and live_flavor == expected_flavor
+            ):
+                return product, variant
+        except Exception:
+            # Los IDs se reparan mediante la busqueda exacta siguiente.
+            pass
+
+    product = find_product_by_name(
+        sheet_product.marca,
+        exact_only=True,
+    )
+
+    if not product:
+        raise SyncError(
+            f"No existe el modelo exacto {sheet_product.marca!r} "
+            "en Tiendanube."
+        )
+
+    product_id = str(product.get("id") or "").strip()
+
+    if not product_id:
+        raise SyncError(
+            f"El modelo {sheet_product.marca!r} no tiene Product ID."
+        )
+
+    product = get_product(product_id)
+    variants = product.get("variants") or []
+    matches = [
+        variant
+        for variant in variants
+        if normalize(variant_flavor(variant)) == expected_flavor
+    ]
+
+    if len(matches) != 1:
+        available = ", ".join(
+            variant_flavor(variant)
+            for variant in variants
+            if variant_flavor(variant)
+        )
+        raise SyncError(
+            f"No pude identificar una unica variante exacta para "
+            f"{sheet_product.marca} / {sheet_product.sabor}. "
+            f"Sabores visibles en Tiendanube: {available or 'ninguno'}."
+        )
+
+    variant = dict(matches[0])
+    variant.setdefault("product_id", product_id)
+    return product, variant
 
 
 
@@ -746,21 +837,18 @@ def modify_existing_product(
         find_sheet_product(marca, sabor)
     )
 
-    if not sheet_product.product_id:
-        raise SyncError(
-            "La fila no tiene TiendaNube Product ID."
-        )
+    product, variant = _live_product_and_variant(sheet_product)
+    product_id = str(
+        product.get("id")
+        or variant.get("product_id")
+        or ""
+    ).strip()
+    variant_id = str(variant.get("id") or "").strip()
 
-    if not sheet_product.variant_id:
+    if not product_id or not variant_id:
         raise SyncError(
-            "La fila no tiene TiendaNube Variant ID."
+            "Tiendanube no devolvio los IDs del producto y su variante."
         )
-
-    product = get_product(sheet_product.product_id)
-    variant = get_variant(
-        sheet_product.product_id,
-        sheet_product.variant_id,
-    )
 
     payload: dict[str, Any] = {}
 
@@ -780,29 +868,28 @@ def modify_existing_product(
             )
         )
 
-    if add_stock is not None:
-        final_stock = (current_stock or 0) + add_stock
+    variations = [
+        value
+        for value in (add_stock, subtract_stock)
+        if value is not None
+    ]
 
-        payload.update(
-            stock_payload_for_variant(
-                variant,
-                final_stock,
-                sheet_product.location_id,
-            )
+    if len(variations) > 1:
+        raise SyncError(
+            "No se puede sumar y restar stock en la misma operacion."
         )
+
+    stock_variation = None
+
+    if add_stock is not None:
+        stock_variation = int(add_stock)
 
     if subtract_stock is not None:
-        final_stock = max(
-            (current_stock or 0) - subtract_stock,
-            0,
-        )
+        stock_variation = -int(subtract_stock)
 
-        payload.update(
-            stock_payload_for_variant(
-                variant,
-                final_stock,
-                sheet_product.location_id,
-            )
+    if stock is not None and stock_variation is not None:
+        raise SyncError(
+            "No se puede fijar y variar el stock en la misma operacion."
         )
 
     if cost is not None:
@@ -845,16 +932,40 @@ def modify_existing_product(
         payload["sku"] = sku
 
     if not payload and not new_model:
-        raise SyncError(
-            "No se indicó ningún dato para modificar."
+        if stock_variation is None:
+            raise SyncError(
+                "No se indicó ningún dato para modificar."
+            )
+
+    if stock_variation is not None:
+        variation_payload: dict[str, Any] = {
+            "action": "variation",
+            "value": stock_variation,
+            "id": variant_id,
+        }
+        location_id = _location_id_for_variation(
+            variant,
+            sheet_product.location_id,
+            stock_variation,
+        )
+
+        if location_id:
+            variation_payload["location_id"] = location_id
+
+        # La operacion atomica evita calcular un stock final con datos viejos y
+        # funciona aunque la variante no tenga SKU.
+        api_request(
+            "POST",
+            f"products/{product_id}/variants/stock",
+            payload=variation_payload,
         )
 
     if payload:
         variant = api_request(
             "PUT",
             (
-                f"products/{sheet_product.product_id}/"
-                f"variants/{sheet_product.variant_id}"
+                f"products/{product_id}/"
+                f"variants/{variant_id}"
             ),
             payload=payload,
         )
@@ -866,7 +977,7 @@ def modify_existing_product(
     if new_model:
         product = api_request(
             "PUT",
-            f"products/{sheet_product.product_id}",
+            f"products/{product_id}",
             payload={
                 "name": {
                     "es": new_model,
@@ -879,9 +990,10 @@ def modify_existing_product(
         ).strip()
 
     variant = get_variant(
-        sheet_product.product_id,
-        sheet_product.variant_id,
+        product_id,
+        variant_id,
     )
+    variant.setdefault("product_id", product_id)
 
     sheet_data = synchronize_variant_to_sheet(
         worksheet,
@@ -912,6 +1024,8 @@ def modify_existing_product(
 
 def find_product_by_name(
     model: str,
+    *,
+    exact_only: bool = False,
 ) -> dict[str, Any] | None:
     page = 1
     target = normalize(model)
@@ -939,6 +1053,13 @@ def find_product_by_name(
 
         if exact:
             return exact[0]
+
+        if exact_only:
+            if len(products) < 100:
+                break
+
+            page += 1
+            continue
 
         flexible = [
             product
