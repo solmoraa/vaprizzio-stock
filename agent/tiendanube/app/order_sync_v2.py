@@ -32,6 +32,20 @@ ESTADO_ENTREGADO = "Entregado"
 FORMA_MERCADO_PAGO = "MERCADO PAGO FABRI"
 FORMA_OFFLINE = "EFECTIVO / TRANSFERENCIA"
 
+# Tiendanube puede exponer el mismo cobro con textos distintos según el
+# medio de pago y la versión de la API. Todos estos valores significan que
+# el dinero ya fue recibido y la venta debe escribirse en Google Sheets.
+PAID_PAYMENT_STATUSES = {
+    "paid",
+    "pagado",
+    "received",
+    "recibido",
+    "approved",
+    "aprobado",
+    "accredited",
+    "acreditado",
+}
+
 
 # Los valores de la derecha deben coincidir con las opciones
 # existentes en el desplegable de la columna Vape.
@@ -116,6 +130,24 @@ def is_cancelled(order: dict[str, Any]) -> bool:
         status in {"cancelled", "canceled", "cancelado"}
         or order.get("cancelled_at")
     )
+
+
+def order_is_paid_v2(order: dict[str, Any]) -> bool:
+    if order.get("paid_at"):
+        return True
+
+    details = order.get("payment_details") or {}
+
+    if not isinstance(details, dict):
+        details = {}
+
+    status = clean_text(
+        order.get("payment_status")
+        or order.get("paymentStatus")
+        or details.get("status")
+    )
+
+    return status in PAID_PAYMENT_STATUSES
 
 
 def order_status_v2(order):
@@ -426,7 +458,8 @@ def read_existing_status(
         )
 
         if value in {
-            ESTADO_INICIAL,
+            ESTADO_RECIBIDO,
+            ESTADO_ACEPTADO,
             ESTADO_ENVIADO,
             ESTADO_ENTREGADO,
         }:
@@ -612,6 +645,7 @@ legacy.order_status = order_status_v2
 legacy.payment_method = payment_method_v2
 legacy.line_product_name = line_product_name_v2
 legacy.line_flavor = line_flavor_v2
+legacy.order_is_paid = order_is_paid_v2
 
 
 def write_order_rows(
@@ -622,7 +656,10 @@ def write_order_rows(
     if not order_id:
         raise SyncError("La orden no tiene ID.")
 
-    preserved_status = "Entregado"
+    # Si la orden ya estaba en la planilla, se preserva el avance operativo.
+    # Una orden que acaba de acreditarse empieza en Aceptado; nunca se la
+    # marca como Entregada automáticamente.
+    preserved_status = read_existing_status(order_id)
 
     copied_order = dict(order)
 
