@@ -22,7 +22,10 @@ install -m 644 "$SERVICE_SOURCE" "$UNIT_DIR/vaprizzio-reconcile.service"
 install -m 644 "$TIMER_SOURCE" "$UNIT_DIR/vaprizzio-reconcile.timer"
 
 systemctl --user daemon-reload
-systemctl --user enable --now vaprizzio-reconcile.timer
+# Si existía un timer previo, enable --now no recarga su configuración en
+# memoria. Reiniciarlo garantiza que tome el intervalo actual de 5 minutos.
+systemctl --user enable vaprizzio-reconcile.timer
+systemctl --user restart vaprizzio-reconcile.timer
 
 printf 'Respaldo de Tiendanube habilitado cada 5 minutos.\n'
 systemctl --user list-timers vaprizzio-reconcile.timer --no-pager

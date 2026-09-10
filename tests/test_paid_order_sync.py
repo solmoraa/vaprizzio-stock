@@ -88,7 +88,7 @@ class PaidOrderSyncTests(unittest.TestCase):
         installer = RECONCILE_INSTALLER.read_text(encoding="utf-8")
         self.assertIn("systemctl --user daemon-reload", installer)
         self.assertIn(
-            "systemctl --user enable --now vaprizzio-reconcile.timer",
+            "systemctl --user restart vaprizzio-reconcile.timer",
             installer,
         )
 
