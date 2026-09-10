@@ -1,0 +1,11 @@
+[Unit]
+Description=Revisar pagos de Tiendanube pendientes de registrar
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=vaprizzio-reconcile.service
+
+[Install]
+WantedBy=timers.target

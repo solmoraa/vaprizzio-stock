@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SYNC_V2 = ROOT / "agent" / "tiendanube" / "app" / "order_sync_v2.py"
 SYNC = ROOT / "agent" / "tiendanube" / "app" / "order_sync.py"
 INSTALLER = ROOT / "deploy" / "install-vaprizziobot-source.sh"
+RECONCILE = ROOT / "agent" / "scripts" / "reconciliar_pedidos_tiendanube.py"
+RECONCILE_INSTALLER = ROOT / "deploy" / "install-vaprizzio-reconciliation-service.sh"
 
 
 def load_payment_functions() -> dict[str, Any]:
@@ -68,6 +70,27 @@ class PaidOrderSyncTests(unittest.TestCase):
         self.assertIn("SOURCE_ORDER_SYNC_V2=", installer)
         self.assertIn('install -m 600 "$SOURCE_ORDER_SYNC" "$TARGET_ORDER_SYNC"', installer)
         self.assertIn('install -m 600 "$SOURCE_ORDER_SYNC_V2" "$TARGET_ORDER_SYNC_V2"', installer)
+
+    def test_reconciliation_is_limited_and_uses_paid_order_filter(self) -> None:
+        source = RECONCILE.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        self.assertIn('"payment_status": "paid"', source)
+        self.assertIn('"updated_at_min": iso_since(days)', source)
+        self.assertIn('"per_page": 30', source)
+        self.assertIn('if args.days < 1 or args.days > 31:', source)
+        self.assertIn('previously_paid=known_before', source)
+        self.assertTrue(any(
+            isinstance(node, ast.FunctionDef) and node.name == "reconcile"
+            for node in tree.body
+        ))
+
+    def test_reconciliation_installer_uses_a_user_timer(self) -> None:
+        installer = RECONCILE_INSTALLER.read_text(encoding="utf-8")
+        self.assertIn("systemctl --user daemon-reload", installer)
+        self.assertIn(
+            "systemctl --user enable --now vaprizzio-reconcile.timer",
+            installer,
+        )
 
 
 if __name__ == "__main__":

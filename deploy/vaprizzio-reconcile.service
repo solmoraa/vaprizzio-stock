@@ -1,0 +1,9 @@
+[Unit]
+Description=Vaprizzio Tiendanube Reconciliation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/openclaw/.openclaw/workspace/vaprizziobot
+ExecStart=/home/openclaw/.openclaw/workspace/vaprizziobot/.venv/bin/python /home/openclaw/.openclaw/workspace/vaprizziobot/scripts/reconciliar_pedidos_tiendanube.py --days 7 --json
