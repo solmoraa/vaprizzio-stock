@@ -8,7 +8,8 @@ Toda operación se realiza mediante los scripts de Google Sheets ubicados en:
 
 ## Reglas obligatorias
 
-1. Ejecutar un solo script por operación.
+1. Ejecutar un solo script por operación, o un único script de lote cuando el
+   usuario informó varias ventas en el mismo mensaje.
 2. No ejecutar `consultar_stock.py` antes de registrar una venta.
 3. `registrar_venta.py` ya busca el producto, verifica el stock, registra la
    venta, descuenta el stock y actualiza la ganancia correspondiente.
@@ -16,8 +17,9 @@ Toda operación se realiza mediante los scripts de Google Sheets ubicados en:
 5. Nunca afirmar que una operación se realizó sin recibir `"ok": true`.
 6. Nunca prometer que se avisará más adelante.
 7. No decir que una operación se completará automáticamente después de un error.
-8. Si una ejecución falla, informar que no se realizó y pedir que se intente
-   nuevamente.
+8. Si una ejecución falla, informar solamente que no se realizó y cuál es el
+   dato comercial a revisar. Nunca exponer scripts, rutas, JSON, límites de
+   Google ni diagnósticos internos.
 9. No repetir automáticamente una venta fallida, porque podría duplicarse.
 10. Si no se indica cantidad, usar 1.
 11. Si no se indica estado, usar Entregado.
@@ -353,8 +355,20 @@ Ejecutar:
   volver a preguntarla.
 - Usar la clave `forma_pago`. Efectivo se envia como `EFECTIVO`; no confundir
   forma de pago con plataforma.
-- Registrar con una sola ejecucion de `agente_vaprizzio.py registrar-venta`.
-  No consultar stock antes y no repetir una venta que devolvio `ok:false`.
+- Para una venta usar una sola ejecucion de `agente_vaprizzio.py
+  registrar-venta`. Para dos o más ventas explícitas del mismo mensaje usar
+  una única ejecución de `agente_vaprizzio.py registrar-ventas`; nunca una
+  ejecución por cada venta. No consultar stock antes ni ejecutar
+  `validar_catalogo_venta.py` antes, durante o después de registrar: es una
+  herramienta diagnóstica manual y agrega consultas innecesarias a Google.
+- En `registrar-ventas`, enviar una entrada completa por cliente. Si el usuario
+  dice expresamente «de la misma forma», la segunda entrada puede llevar
+  `"misma_forma_anterior":true` y hereda únicamente plataforma y forma de
+  pago de la venta anterior. Nunca heredar cliente, productos, cantidades ni
+  fecha. Si no dice eso, pedir solo el dato faltante.
+- No repetir una venta que devolvió `ok:false`. Si un lote devuelve
+  `ventas_registradas`, informar esas ventas como hechas y únicamente la venta
+  pendiente como no registrada; nunca repetir todo el lote.
 - Ante `ok:false`, afirmar que no se registro nada e indicar solo el dato
   comercial a revisar. No mostrar scripts, comandos, JSON, rutas, hojas, filas,
   limites de API, dispatcher, trazas ni otros diagnosticos internos.

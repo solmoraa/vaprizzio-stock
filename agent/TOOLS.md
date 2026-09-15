@@ -117,10 +117,16 @@ Google Sheets y Tiendanube mediante `--precio`.
 `marca`, `sabor` y `cantidad`. Los nombres se resuelven contra el catalogo vivo;
 los alias solo se aplican por igualdad exacta. Una solicitud admite un intento.
 
+`registrar-ventas` recibe `ventas`, una lista de objetos con el mismo contrato.
+Usarlo una sola vez si el usuario informa dos o más ventas. Cuando diga
+expresamente «de la misma forma», la venta siguiente puede usar
+`"misma_forma_anterior":true`: hereda solo plataforma y forma de pago, nunca
+cliente, productos, cantidad ni fecha.
+
 `modificar-plataforma-venta` requiere `orden` y `plataforma`; cambia solamente
 ese campo y nunca vuelve a registrar la venta.
 
-Validacion de solo lectura de todos los modelos y sabores visibles en la hoja:
+Validación diagnóstica de solo lectura, solo si un humano la pide expresamente:
 
 `/home/openclaw/.openclaw/workspace/vaprizziobot/.venv/bin/python /home/openclaw/.openclaw/workspace/vaprizziobot/scripts/validar_catalogo_venta.py`
 
@@ -128,6 +134,8 @@ Para probar un caso concreto sin escribir:
 
 `/home/openclaw/.openclaw/workspace/vaprizziobot/.venv/bin/python /home/openclaw/.openclaw/workspace/vaprizziobot/scripts/validar_catalogo_venta.py --modelo "Lost Mary Dura" --sabor "Grape Ice" --sabor "Watermelon Ice"`
 
-Ambas validaciones hacen una sola lectura general y no modifican stock ni ventas.
+Ambas validaciones no modifican stock ni ventas, pero consumen una lectura de
+Google Sheets. Nunca ejecutarlas antes, durante o después de registrar una
+venta y nunca ante un error de registro.
 <!-- FIN TOOL VAP VENTA 20260831 -->
 

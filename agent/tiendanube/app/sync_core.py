@@ -483,6 +483,21 @@ def find_sheet_product(
     )
 
 
+def sheet_product_context() -> tuple[
+    gspread.Worksheet,
+    dict[str, int],
+    list[SheetProduct],
+]:
+    """Carga Productos una sola vez para una operación administrativa.
+
+    Una venta ya valida cada modelo contra este catálogo. Descargar la misma
+    hoja otra vez por cada variante no agrega seguridad y puede agotar la cuota
+    de Google Sheets.
+    """
+    worksheet, _, columns, products = read_products()
+    return worksheet, columns, products
+
+
 def update_sheet_cells(
     worksheet: gspread.Worksheet,
     columns: dict[str, int],
@@ -584,6 +599,7 @@ def synchronize_variant_to_sheet(
     *,
     product_name: str,
     variant: dict[str, Any],
+    current_cost: float | None = None,
 ) -> dict[str, Any]:
     """Sincroniza datos comerciales sin pisar el costo local.
 
@@ -595,9 +611,13 @@ def synchronize_variant_to_sheet(
     price = money_output(variant.get("price"))
     stock = total_stock(variant)
 
-    current_row = worksheet.row_values(row)
-    cost_column = columns.get(normalize("Costo"))
-    current_cost = parse_float(cell(current_row, cost_column))
+    # La operación de venta ya conoce el costo de Productos. Reutilizarlo evita
+    # otra lectura de Google; los demás flujos mantienen el comportamiento
+    # anterior cuando no lo proveen.
+    if current_cost is None:
+        current_row = worksheet.row_values(row)
+        cost_column = columns.get(normalize("Costo"))
+        current_cost = parse_float(cell(current_row, cost_column))
 
     gain = None
     if price is not None and current_cost is not None:
@@ -832,10 +852,19 @@ def modify_existing_product(
     new_flavor: str | None = None,
     new_model: str | None = None,
     sku: str | None = None,
+    sheet_context: tuple[
+        gspread.Worksheet,
+        dict[str, int],
+        SheetProduct,
+    ] | None = None,
 ) -> dict[str, Any]:
-    worksheet, columns, sheet_product = (
-        find_sheet_product(marca, sabor)
-    )
+    if sheet_context is None:
+        worksheet, columns, sheet_product = find_sheet_product(
+            marca,
+            sabor,
+        )
+    else:
+        worksheet, columns, sheet_product = sheet_context
 
     product, variant = _live_product_and_variant(sheet_product)
     product_id = str(
@@ -1001,6 +1030,7 @@ def modify_existing_product(
         sheet_product.row,
         product_name=product_name,
         variant=variant,
+        current_cost=getattr(sheet_product, "costo", None),
     )
 
     return {

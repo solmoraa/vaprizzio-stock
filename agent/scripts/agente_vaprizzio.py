@@ -37,6 +37,7 @@ from app.business.sales import (  # noqa: E402
     cancelar_venta_manual,
     consultar_venta,
     registrar_venta_manual,
+    registrar_ventas_manuales,
 )
 from app.order_sync_v2 import (  # noqa: E402
     cancel_internal_order,
@@ -221,7 +222,7 @@ def ejecutar_consultar_stock(
     )
 
 
-def ejecutar_registrar_venta(
+def datos_venta(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     cliente = requerido(
@@ -263,16 +264,61 @@ def ejecutar_registrar_venta(
             "productos debe ser una lista no vacía."
         )
 
-    productos = normalizar_productos(productos)
+    return {
+        "cliente": cliente,
+        "productos": normalizar_productos(productos),
+        "plataforma": plataforma,
+        "forma_pago": forma_pago,
+        "estado": payload.get("estado") or "Entregado",
+        "fecha": payload.get("fecha"),
+    }
 
-    return registrar_venta_manual(
-        cliente=cliente,
-        productos=productos,
-        plataforma=plataforma,
-        forma_pago=forma_pago,
-        estado=payload.get("estado") or "Entregado",
-        fecha=payload.get("fecha"),
-    )
+
+def ejecutar_registrar_venta(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    return registrar_venta_manual(**datos_venta(payload))
+
+
+def ejecutar_registrar_ventas(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    ventas = payload.get("ventas")
+
+    if not isinstance(ventas, list) or not ventas:
+        raise BusinessError("ventas debe ser una lista no vacía.")
+
+    normalized = []
+    previous: dict[str, Any] | None = None
+
+    for index, raw_sale in enumerate(ventas, start=1):
+        if not isinstance(raw_sale, dict):
+            raise BusinessError(
+                f"La venta {index} debe ser un objeto JSON."
+            )
+
+        sale = dict(raw_sale)
+        if sale.pop("misma_forma_anterior", False) is True:
+            if previous is None:
+                raise BusinessError(
+                    "La primera venta no puede usar datos anteriores."
+                )
+            for key in (
+                "plataforma",
+                "plataforma_confirmada",
+                "forma_pago",
+            ):
+                sale.setdefault(key, previous[key])
+
+        prepared = datos_venta(sale)
+        normalized.append(prepared)
+        previous = {
+            "plataforma": prepared["plataforma"],
+            "plataforma_confirmada": True,
+            "forma_pago": prepared["forma_pago"],
+        }
+
+    return registrar_ventas_manuales(normalized)
 
 
 def ejecutar_consultar_orden(
@@ -634,6 +680,7 @@ ACCIONES = {
     "actualizar-costo-usdt": ejecutar_actualizar_costo_usdt,
     "actualizar-valor-usdt": ejecutar_actualizar_valor_usdt,
     "registrar-venta": ejecutar_registrar_venta,
+    "registrar-ventas": ejecutar_registrar_ventas,
     "consultar-orden": ejecutar_consultar_orden_externa,
     "consultar-venta-manual": (
         ejecutar_consultar_venta_manual

@@ -15,6 +15,7 @@ SOURCE_ORDER_SYNC_V2="$SOURCE_AGENT/tiendanube/app/order_sync_v2.py"
 SOURCE_SCRIPT="$SOURCE_AGENT/scripts/agente_vaprizzio.py"
 SOURCE_RECONCILE="$SOURCE_AGENT/scripts/reconciliar_pedidos_tiendanube.py"
 SOURCE_PROMPT="$SOURCE_AGENT/AGENTS.md"
+SOURCE_TOOLS="$SOURCE_AGENT/TOOLS.md"
 SOURCE_SKILL="$SOURCE_AGENT/skills/vaprizzio-sheets/SKILL.md"
 
 TARGET_SALES="$TARGET/tiendanube/app/business/sales.py"
@@ -24,11 +25,12 @@ TARGET_ORDER_SYNC_V2="$TARGET/tiendanube/app/order_sync_v2.py"
 TARGET_SCRIPT="$TARGET/scripts/agente_vaprizzio.py"
 TARGET_RECONCILE="$TARGET/scripts/reconciliar_pedidos_tiendanube.py"
 TARGET_PROMPT="$TARGET/AGENTS.md"
+TARGET_TOOLS="$TARGET/TOOLS.md"
 TARGET_SKILL="$TARGET/skills/vaprizzio-sheets/SKILL.md"
 
 for path in \
-  "$SOURCE_SALES" "$SOURCE_SYNC" "$SOURCE_ORDER_SYNC" "$SOURCE_ORDER_SYNC_V2" "$SOURCE_SCRIPT" "$SOURCE_RECONCILE" "$SOURCE_PROMPT" "$SOURCE_SKILL" \
-  "$TARGET_SALES" "$TARGET_SYNC" "$TARGET_ORDER_SYNC" "$TARGET_ORDER_SYNC_V2" "$TARGET_SCRIPT" "$TARGET_PROMPT" "$TARGET_SKILL"; do
+  "$SOURCE_SALES" "$SOURCE_SYNC" "$SOURCE_ORDER_SYNC" "$SOURCE_ORDER_SYNC_V2" "$SOURCE_SCRIPT" "$SOURCE_RECONCILE" "$SOURCE_PROMPT" "$SOURCE_TOOLS" "$SOURCE_SKILL" \
+  "$TARGET_SALES" "$TARGET_SYNC" "$TARGET_ORDER_SYNC" "$TARGET_ORDER_SYNC_V2" "$TARGET_SCRIPT" "$TARGET_PROMPT" "$TARGET_TOOLS" "$TARGET_SKILL"; do
   test -f "$path"
 done
 test -x "$TARGET/.venv/bin/python"
@@ -57,6 +59,7 @@ if test -f "$TARGET_RECONCILE"; then
   cp -a "$TARGET_RECONCILE" "$BACKUP/scripts/reconciliar_pedidos_tiendanube.py"
 fi
 cp -a "$TARGET_PROMPT" "$BACKUP/AGENTS.md"
+cp -a "$TARGET_TOOLS" "$BACKUP/TOOLS.md"
 cp -a "$TARGET_SKILL" "$BACKUP/skills/vaprizzio-sheets/SKILL.md"
 
 install -m 600 "$SOURCE_SALES" "$TARGET_SALES"
@@ -66,6 +69,7 @@ install -m 600 "$SOURCE_ORDER_SYNC_V2" "$TARGET_ORDER_SYNC_V2"
 install -m 700 "$SOURCE_SCRIPT" "$TARGET_SCRIPT"
 install -m 700 "$SOURCE_RECONCILE" "$TARGET_RECONCILE"
 install -m 600 "$SOURCE_PROMPT" "$TARGET_PROMPT"
+install -m 600 "$SOURCE_TOOLS" "$TARGET_TOOLS"
 install -m 600 "$SOURCE_SKILL" "$TARGET_SKILL"
 
 "$TARGET/.venv/bin/python" -m py_compile \

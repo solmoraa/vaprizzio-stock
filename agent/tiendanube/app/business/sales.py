@@ -11,6 +11,7 @@ from app.order_sync_v2 import (
 from app.sync_core import (
     modify_existing_product,
     read_products,
+    sheet_product_context,
 )
 
 from .common import (
@@ -26,10 +27,6 @@ from .common import (
     texto,
 )
 from .products import resolver_producto
-from .stock import (
-    restar_stock,
-    sumar_stock,
-)
 
 
 # Equivalencias historicas entre nombres de Productos/Tiendanube y Ventas.
@@ -290,13 +287,16 @@ def aplicar_formato_pago(
 
 def producto_por_variant_id(
     variant_id: Any,
+    catalogo: list[Any] | None = None,
 ) -> dict[str, Any] | None:
     expected = texto(variant_id)
 
     if not expected:
         return None
 
-    _, _, _, products = read_products()
+    products = catalogo
+    if products is None:
+        _, _, _, products = read_products()
 
     for product in products:
         if texto(product.variant_id) == expected:
@@ -317,11 +317,98 @@ def producto_por_variant_id(
     return None
 
 
+def producto_catalogo_a_dict(product: Any) -> dict[str, Any]:
+    """Convierte una fila ya leída de Productos al contrato de ventas."""
+    return {
+        "fila": product.row,
+        "marca": product.marca,
+        "sabor": product.sabor,
+        "stock": product.stock,
+        "costo": product.costo,
+        "precio": product.precio,
+        "ganancia": product.ganancia,
+        "tiendanube_product_id": product.product_id,
+        "tiendanube_variant_id": product.variant_id,
+        "tiendanube_location_id": product.location_id,
+        "sku": product.sku,
+    }
+
+
+def resolver_producto_desde_catalogo(
+    *,
+    catalogo: list[Any],
+    marca: Any = None,
+    sabor: Any,
+    variant_id: Any = None,
+) -> dict[str, Any]:
+    """Resuelve una variante en un catálogo ya descargado.
+
+    No se permite cambiar de familia por el sabor. Las equivalencias históricas
+    se usan solo como alternativa exacta entre Productos y Ventas.
+    """
+    requested_model = texto(marca)
+    requested_flavor = texto(sabor)
+    requested_variant = texto(variant_id)
+
+    if not requested_flavor:
+        raise BusinessError("Falta indicar el sabor del producto.")
+
+    if requested_variant:
+        matches = [
+            product for product in catalogo
+            if texto(product.variant_id) == requested_variant
+        ]
+    else:
+        flavor_key = normalizar(requested_flavor)
+        candidates = catalogo
+
+        if requested_model:
+            requested_key = normalizar(requested_model)
+            model_keys = {requested_key}
+            model_keys.update(
+                normalizar(product_model)
+                for product_model, sales_model in ALIAS_MODELOS.items()
+                if normalizar(sales_model) == requested_key
+            )
+            candidates = [
+                product for product in catalogo
+                if normalizar(product.marca) in model_keys
+            ]
+
+        matches = [
+            product for product in candidates
+            if normalizar(product.sabor) == flavor_key
+        ]
+
+    if len(matches) == 1:
+        return producto_catalogo_a_dict(matches[0])
+
+    if not matches:
+        target = (
+            f"{requested_model} / {requested_flavor}"
+            if requested_model else requested_flavor
+        )
+        raise BusinessError(
+            f"No encontré exactamente el producto {target!r} "
+            "en Productos."
+        )
+
+    options = ", ".join(
+        f"{product.marca} / {product.sabor}"
+        for product in matches[:10]
+    )
+    raise BusinessError(
+        f"Hay más de una coincidencia para {requested_flavor!r}: {options}. "
+        "Indicá el modelo exacto."
+    )
+
+
 def resolver_producto_venta(
     *,
     marca: Any = None,
     sabor: Any,
     variant_id: Any = None,
+    catalogo: list[Any] | None = None,
 ) -> dict[str, Any]:
     """
     Resuelve un producto sin cambiar nunca de modelo.
@@ -333,6 +420,14 @@ def resolver_producto_venta(
     - Solo se permite buscar únicamente por sabor cuando el usuario
       realmente no indicó ningún modelo.
     """
+    if catalogo is not None:
+        return resolver_producto_desde_catalogo(
+            catalogo=catalogo,
+            marca=marca,
+            sabor=sabor,
+            variant_id=variant_id,
+        )
+
     by_variant = producto_por_variant_id(variant_id)
 
     if by_variant:
@@ -439,6 +534,9 @@ def resolver_producto_venta(
 
 def normalizar_items(
     productos: Any,
+    *,
+    catalogo: list[Any] | None = None,
+    sheet_context: tuple[Any, dict[str, int]] | None = None,
 ) -> list[dict[str, Any]]:
     if not isinstance(productos, list) or not productos:
         raise BusinessError(
@@ -496,7 +594,28 @@ def normalizar_items(
                 raw_item.get("variant_id")
                 or raw_item.get("tiendanube_variant_id")
             ),
+            catalogo=catalogo,
         )
+
+        product_context = None
+        if catalogo is not None and sheet_context is not None:
+            catalog_product = next(
+                (
+                    entry for entry in catalogo
+                    if normalizar(entry.marca) == normalizar(product["marca"])
+                    and normalizar(entry.sabor) == normalizar(product["sabor"])
+                ),
+                None,
+            )
+            if catalog_product is None:
+                raise BusinessError(
+                    "El producto resuelto no pertenece al catálogo cargado."
+                )
+            product_context = (
+                sheet_context[0],
+                sheet_context[1],
+                catalog_product,
+            )
 
         stock = product["stock"]
 
@@ -568,6 +687,7 @@ def normalizar_items(
                 "ganancia_unitaria": dinero(unit_gain),
                 "ganancia_total": 0,
                 "producto": product,
+                "sheet_context": product_context,
             }
 
         item = grouped[key]
@@ -894,28 +1014,13 @@ def modelo_dropdown_exacto(
             "No se pudo determinar el modelo para Ventas."
         )
 
-    options = opciones_dropdown_celda(
-        worksheet,
-        row_number,
-        column_number,
-    )
-
-    requested_normalized = normalizar(requested)
-
-    # No bloquear una venta solo porque Google no haya devuelto los metadatos
-    # del desplegable. El modelo ya fue resuelto en la hoja Productos.
-    if not options:
-        return requested
-
-    # Primero se compara contra las opciones reales de la hoja.
-    for option in options:
-        if normalizar(option) == requested_normalized:
-            return option
-
-    raise BusinessError(
-        f"El modelo {requested!r} no coincide con ninguna "
-        "opción actual del desplegable de la columna Vape en Google Sheets."
-    )
+    # El modelo ya fue validado contra Productos. Consultar los metadatos del
+    # desplegable por cada fila convierte una simple venta en varias llamadas a
+    # Google Sheets y puede provocar 429. La fila anterior conserva la misma
+    # validación al copiar su formato; si una lista está atrasada, no se debe
+    # rechazar ni reemplazar un modelo válido del catálogo.
+    del worksheet, row_number, column_number
+    return requested
 
 
 def buscar_celda_modelo_existente(
@@ -1257,20 +1362,9 @@ def escribir_filas_venta(
         range(start_row, end_row + 1)
     )
 
-    # Copia un chip de Vape ya existente para conservar
-    # exactamente el valor, validación y color configurados
-    # en Google Sheets.
-    aplicar_chips_vape(
-        worksheet=worksheet,
-        rows=written_rows,
-        items=items,
-        vape_column=columns.get(
-            normalizar("Vape")
-        ),
-        sabor_column=columns.get(
-            normalizar("Sabor")
-        ),
-    )
+    # El formato y la validación se copiaron en bloque desde la fila anterior.
+    # No se buscan ni copian chips históricos: eso recorría todas las hojas de
+    # ventas por cada artículo y era una causa de saturación de Google Sheets.
 
     aplicar_formato_pago(
         worksheet,
@@ -1313,18 +1407,24 @@ def restar_stock_item(
             "sincronizar con Tiendanube."
         )
 
-    result = restar_stock(
-        marca=marca,
-        sabor=sabor,
-        cantidad=cantidad,
-    )
-
-    stock_result = result.get("resultado") or {}
-
-    if not stock_result.get("ok"):
+    product = item.get("producto") or {}
+    available = product.get("stock")
+    if available is None or cantidad is None or cantidad > available:
         raise BusinessError(
-            "Tiendanube no confirmó el descuento de stock."
+            f"Stock insuficiente para {marca} / {sabor}."
         )
+
+    try:
+        stock_result = modify_existing_product(
+            marca=marca,
+            sabor=sabor,
+            subtract_stock=int(cantidad),
+            sheet_context=item.get("sheet_context"),
+        )
+    except Exception as exc:
+        raise BusinessError(
+            f"No se pudo descontar stock de {marca} / {sabor}: {exc}"
+        ) from exc
 
     item["stock_anterior"] = stock_result.get(
         "stock_anterior"
@@ -1337,7 +1437,22 @@ def restar_stock_item(
         "variant_id"
     )
 
-    return result
+    # El lote comparte el catálogo para no volver a leer Google Sheets. Dejar
+    # su stock al día mantiene la validación correcta si dos ventas del mismo
+    # mensaje incluyen la misma variante.
+    remaining = stock_result.get("stock")
+    item["producto"]["stock"] = remaining
+    context = item.get("sheet_context")
+    if context is not None:
+        context[2].stock = remaining
+
+    return {
+        "ok": True,
+        "operacion": "restar",
+        "cantidad": cantidad,
+        "producto": product,
+        "resultado": stock_result,
+    }
 
 
 def sumar_stock_item(
@@ -1359,20 +1474,29 @@ def sumar_stock_item(
             "reponer stock en Tiendanube."
         )
 
-    result = sumar_stock(
-        marca=marca,
-        sabor=sabor,
-        cantidad=cantidad,
-    )
-
-    stock_result = result.get("resultado") or {}
-
-    if not stock_result.get("ok"):
-        raise BusinessError(
-            "Tiendanube no confirmó la reposición de stock."
+    try:
+        stock_result = modify_existing_product(
+            marca=marca,
+            sabor=sabor,
+            add_stock=int(cantidad),
+            sheet_context=item.get("sheet_context"),
         )
+    except Exception as exc:
+        raise BusinessError(
+            f"No se pudo reponer stock de {marca} / {sabor}: {exc}"
+        ) from exc
 
-    return result
+    context = item.get("sheet_context")
+    if context is not None:
+        context[2].stock = stock_result.get("stock")
+
+    return {
+        "ok": True,
+        "operacion": "sumar",
+        "cantidad": cantidad,
+        "producto": item.get("producto") or {},
+        "resultado": stock_result,
+    }
 
 
 
@@ -1402,6 +1526,7 @@ def registrar_venta_manual(
     forma_pago: Any = "",
     estado: Any = "Recibido",
     fecha: Any = None,
+    catalogo_contexto: tuple[Any, dict[str, int], list[Any]] | None = None,
 ) -> dict[str, Any]:
     customer = texto(cliente)
 
@@ -1417,7 +1542,15 @@ def registrar_venta_manual(
     created = fecha_desde_value(fecha)
     date_text = fecha_para_sheet(created)
 
-    items = normalizar_items(productos)
+    if catalogo_contexto is None:
+        catalogo_contexto = sheet_product_context()
+
+    products_worksheet, product_columns, catalogo = catalogo_contexto
+    items = normalizar_items(
+        productos,
+        catalogo=catalogo,
+        sheet_context=(products_worksheet, product_columns),
+    )
 
     worksheet = legacy.get_or_create_sales_sheet(
         created
@@ -1519,6 +1652,57 @@ def registrar_venta_manual(
             }
             for item in items
         ],
+    }
+
+
+def registrar_ventas_manuales(
+    ventas: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Registra varias ventas explícitas reutilizando una sola lectura.
+
+    Cada venta sigue conservando su propia orden, cliente, pago y plataforma.
+    No se reutilizan datos implícitamente: esa decisión se hace antes, en el
+    contrato del agente, solo si el usuario dijo que era "de la misma forma".
+    """
+    if not isinstance(ventas, list) or not ventas:
+        raise BusinessError("Debe indicar al menos una venta.")
+
+    if len(ventas) > 10:
+        raise BusinessError("Se pueden registrar hasta 10 ventas por vez.")
+
+    catalogo_contexto = sheet_product_context()
+    results = []
+
+    for index, venta in enumerate(ventas, start=1):
+        try:
+            results.append(
+                registrar_venta_manual(
+                    cliente=venta["cliente"],
+                    productos=venta["productos"],
+                    plataforma=venta["plataforma"],
+                    forma_pago=venta["forma_pago"],
+                    estado=venta.get("estado") or "Entregado",
+                    fecha=venta.get("fecha"),
+                    catalogo_contexto=catalogo_contexto,
+                )
+            )
+        except Exception as exc:
+            # Las ventas anteriores ya tienen número de orden y no se deben
+            # repetir. Devolverlas explícitamente evita que el agente afirme
+            # que no se registró nada ante un fallo posterior.
+            return {
+                "ok": True,
+                "tipo": "ventas_manuales_parciales",
+                "ventas_registradas": results,
+                "venta_pendiente": index,
+                "error": str(exc),
+            }
+
+    return {
+        "ok": True,
+        "tipo": "ventas_manuales",
+        "cantidad": len(results),
+        "ventas": results,
     }
 
 

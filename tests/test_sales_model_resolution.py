@@ -66,6 +66,38 @@ def load_resolution_functions() -> dict[str, Any]:
     return namespace
 
 
+def load_batch_functions() -> dict[str, Any]:
+    tree = ast.parse(AGENT.read_text(encoding="utf-8"))
+    wanted = {
+        "normalizar_modelo",
+        "normalizar_productos",
+        "requerido",
+        "datos_venta",
+        "ejecutar_registrar_ventas",
+    }
+    nodes = [
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in wanted
+    ]
+    registered: list[dict[str, Any]] = []
+
+    def registrar_ventas_manuales(ventas):
+        registered.extend(ventas)
+        return {"ok": True, "ventas": ventas}
+
+    namespace = {
+        "Any": Any,
+        "BusinessError": BusinessError,
+        "registrar_ventas_manuales": registrar_ventas_manuales,
+    }
+    exec(
+        compile(ast.Module(body=nodes, type_ignores=[]), str(AGENT), "exec"),
+        namespace,
+    )
+    namespace["registered"] = registered
+    return namespace
+
+
 class SpreadsheetFixture:
     def __init__(self, *, condition: str, values: list[dict[str, str]], rows=None):
         self.condition = condition
@@ -119,7 +151,7 @@ class SalesModelResolutionTests(unittest.TestCase):
         self.assertEqual(resolve("Elfbar BC 15k"), "Elfbar 15K")
         self.assertEqual(resolve("Elfbar Ice King 40k"), "Elfbar Ice king")
 
-    def test_dropdown_options_can_come_from_a_sheet_range(self) -> None:
+    def test_sale_does_not_read_dropdown_metadata_per_row(self) -> None:
         spreadsheet = SpreadsheetFixture(
             condition="ONE_OF_RANGE",
             values=[{"userEnteredValue": "Catalogo!A2:A"}],
@@ -133,7 +165,7 @@ class SalesModelResolutionTests(unittest.TestCase):
             "Lost Mary Dura",
         )
         self.assertEqual(exact, "Lost Mary Dura")
-        self.assertEqual(spreadsheet.requested_ranges, ["Catalogo!A2:A"])
+        self.assertEqual(spreadsheet.requested_ranges, [])
 
     def test_missing_dropdown_metadata_does_not_reject_catalog_model(self) -> None:
         spreadsheet = SpreadsheetFixture(condition="CUSTOM_FORMULA", values=[])
@@ -146,19 +178,65 @@ class SalesModelResolutionTests(unittest.TestCase):
         )
         self.assertEqual(exact, "Lost Mary Dura")
 
-    def test_dropdown_never_uses_partial_model_matching(self) -> None:
+    def test_stale_dropdown_never_replaces_catalog_model(self) -> None:
         spreadsheet = SpreadsheetFixture(
             condition="ONE_OF_LIST",
             values=[{"userEnteredValue": "Lost Mary Mixer 30k"}],
         )
         worksheet = WorksheetFixture(spreadsheet)
-        with self.assertRaises(BusinessError):
-            self.namespace["modelo_dropdown_exacto"](
-                worksheet,
-                2,
-                4,
-                "Lost Mary",
-            )
+        exact = self.namespace["modelo_dropdown_exacto"](
+            worksheet,
+            2,
+            4,
+            "Lost Mary Dura",
+        )
+        self.assertEqual(exact, "Lost Mary Dura")
+        self.assertEqual(spreadsheet.requested_ranges, [])
+
+    def test_multiple_sales_inherit_only_explicit_previous_payment_and_channel(self) -> None:
+        namespace = load_batch_functions()
+        result = namespace["ejecutar_registrar_ventas"]({
+            "ventas": [
+                {
+                    "cliente": "Juan",
+                    "productos": [{"marca": "Elfbar Ice King", "sabor": "Mango"}],
+                    "plataforma": "Instagram",
+                    "plataforma_confirmada": True,
+                    "forma_pago": "Mercado Pago",
+                },
+                {
+                    "cliente": "Martina",
+                    "productos": [{"marca": "Elfbar Ice King", "sabor": "Miami Mint"}],
+                    "misma_forma_anterior": True,
+                },
+            ]
+        })
+        self.assertTrue(result["ok"])
+        second = namespace["registered"][1]
+        self.assertEqual(second["cliente"], "Martina")
+        self.assertEqual(second["plataforma"], "Instagram")
+        self.assertEqual(second["forma_pago"], "Mercado Pago")
+        self.assertEqual(second["productos"][0]["marca"], "Elfbar Ice King 40k")
+
+    def test_sale_prompt_never_uses_catalog_validator_automatically(self) -> None:
+        prompt = PROMPT.read_text(encoding="utf-8")
+        tools = (ROOT / "agent" / "TOOLS.md").read_text(encoding="utf-8")
+        self.assertIn("nunca una\n  ejecución por cada venta", prompt)
+        self.assertIn("Nunca ejecutarlas antes, durante o después", tools)
+        self.assertIn('"registrar-ventas": ejecutar_registrar_ventas', AGENT.read_text(encoding="utf-8"))
+
+    def test_manual_sale_reuses_catalog_and_skips_historical_chip_scans(self) -> None:
+        source = SALES.read_text(encoding="utf-8")
+        register_start = source.index("def registrar_venta_manual(")
+        register_end = source.index("def registrar_ventas_manuales(", register_start)
+        write_start = source.index("def escribir_filas_venta(")
+        write_end = source.index("# ============================================================\n# STOCK", write_start)
+        register = source[register_start:register_end]
+        write = source[write_start:write_end]
+        self.assertIn("catalogo_contexto = sheet_product_context()", register)
+        self.assertIn("catalogo=catalogo", register)
+        self.assertNotIn("aplicar_chips_vape(", write)
+        self.assertIn("sheet_context=item.get(\"sheet_context\")", source)
 
     def test_stale_conflicting_lists_were_removed(self) -> None:
         sales_source = SALES.read_text(encoding="utf-8")
@@ -183,6 +261,7 @@ class SalesModelResolutionTests(unittest.TestCase):
         self.assertIn("VAPRIZZIOBOT_TARGET", source)
         self.assertIn('SOURCE_AGENT="$REPO_ROOT/agent"', source)
         self.assertIn('SOURCE_SALES="$SOURCE_AGENT/tiendanube/app/business/sales.py"', source)
+        self.assertIn('SOURCE_TOOLS="$SOURCE_AGENT/TOOLS.md"', source)
         self.assertNotIn("chat-vaprizzio-test.service", source)
         self.assertNotIn("extensions/vaprizzio-tools", source)
 
