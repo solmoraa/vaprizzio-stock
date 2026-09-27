@@ -12,6 +12,11 @@ SOURCE_SALES="$SOURCE_AGENT/tiendanube/app/business/sales.py"
 SOURCE_SYNC="$SOURCE_AGENT/tiendanube/app/sync_core.py"
 SOURCE_ORDER_SYNC="$SOURCE_AGENT/tiendanube/app/order_sync.py"
 SOURCE_ORDER_SYNC_V2="$SOURCE_AGENT/tiendanube/app/order_sync_v2.py"
+SOURCE_WEBHOOK="$SOURCE_AGENT/tiendanube/app/webhook_server.py"
+SOURCE_APPLICATION_INIT="$SOURCE_AGENT/tiendanube/app/application/__init__.py"
+SOURCE_ADMIN_SERVICE="$SOURCE_AGENT/tiendanube/app/application/admin_service.py"
+SOURCE_PRESENTATION_INIT="$SOURCE_AGENT/tiendanube/app/presentation/__init__.py"
+SOURCE_REST_API="$SOURCE_AGENT/tiendanube/app/presentation/rest_api.py"
 SOURCE_SCRIPT="$SOURCE_AGENT/scripts/agente_vaprizzio.py"
 SOURCE_RECONCILE="$SOURCE_AGENT/scripts/reconciliar_pedidos_tiendanube.py"
 SOURCE_PROMPT="$SOURCE_AGENT/AGENTS.md"
@@ -22,6 +27,11 @@ TARGET_SALES="$TARGET/tiendanube/app/business/sales.py"
 TARGET_SYNC="$TARGET/tiendanube/app/sync_core.py"
 TARGET_ORDER_SYNC="$TARGET/tiendanube/app/order_sync.py"
 TARGET_ORDER_SYNC_V2="$TARGET/tiendanube/app/order_sync_v2.py"
+TARGET_WEBHOOK="$TARGET/tiendanube/app/webhook_server.py"
+TARGET_APPLICATION_INIT="$TARGET/tiendanube/app/application/__init__.py"
+TARGET_ADMIN_SERVICE="$TARGET/tiendanube/app/application/admin_service.py"
+TARGET_PRESENTATION_INIT="$TARGET/tiendanube/app/presentation/__init__.py"
+TARGET_REST_API="$TARGET/tiendanube/app/presentation/rest_api.py"
 TARGET_SCRIPT="$TARGET/scripts/agente_vaprizzio.py"
 TARGET_RECONCILE="$TARGET/scripts/reconciliar_pedidos_tiendanube.py"
 TARGET_PROMPT="$TARGET/AGENTS.md"
@@ -29,7 +39,9 @@ TARGET_TOOLS="$TARGET/TOOLS.md"
 TARGET_SKILL="$TARGET/skills/vaprizzio-sheets/SKILL.md"
 
 for path in \
-  "$SOURCE_SALES" "$SOURCE_SYNC" "$SOURCE_ORDER_SYNC" "$SOURCE_ORDER_SYNC_V2" "$SOURCE_SCRIPT" "$SOURCE_RECONCILE" "$SOURCE_PROMPT" "$SOURCE_TOOLS" "$SOURCE_SKILL" \
+  "$SOURCE_SALES" "$SOURCE_SYNC" "$SOURCE_ORDER_SYNC" "$SOURCE_ORDER_SYNC_V2" "$SOURCE_WEBHOOK" \
+  "$SOURCE_APPLICATION_INIT" "$SOURCE_ADMIN_SERVICE" "$SOURCE_PRESENTATION_INIT" "$SOURCE_REST_API" \
+  "$SOURCE_SCRIPT" "$SOURCE_RECONCILE" "$SOURCE_PROMPT" "$SOURCE_TOOLS" "$SOURCE_SKILL" \
   "$TARGET_SALES" "$TARGET_SYNC" "$TARGET_ORDER_SYNC" "$TARGET_ORDER_SYNC_V2" "$TARGET_SCRIPT" "$TARGET_PROMPT" "$TARGET_TOOLS" "$TARGET_SKILL"; do
   test -f "$path"
 done
@@ -49,11 +61,22 @@ umask 077
 mkdir -p \
   "$BACKUP/scripts" \
   "$BACKUP/tiendanube/app/business" \
+  "$BACKUP/tiendanube/app/application" \
+  "$BACKUP/tiendanube/app/presentation" \
   "$BACKUP/skills/vaprizzio-sheets"
 cp -a "$TARGET_SALES" "$BACKUP/tiendanube/app/business/sales.py"
 cp -a "$TARGET_SYNC" "$BACKUP/tiendanube/app/sync_core.py"
 cp -a "$TARGET_ORDER_SYNC" "$BACKUP/tiendanube/app/order_sync.py"
 cp -a "$TARGET_ORDER_SYNC_V2" "$BACKUP/tiendanube/app/order_sync_v2.py"
+if test -f "$TARGET_WEBHOOK"; then
+  cp -a "$TARGET_WEBHOOK" "$BACKUP/tiendanube/app/webhook_server.py"
+fi
+if test -f "$TARGET_ADMIN_SERVICE"; then
+  cp -a "$TARGET_ADMIN_SERVICE" "$BACKUP/tiendanube/app/application/admin_service.py"
+fi
+if test -f "$TARGET_REST_API"; then
+  cp -a "$TARGET_REST_API" "$BACKUP/tiendanube/app/presentation/rest_api.py"
+fi
 cp -a "$TARGET_SCRIPT" "$BACKUP/scripts/agente_vaprizzio.py"
 if test -f "$TARGET_RECONCILE"; then
   cp -a "$TARGET_RECONCILE" "$BACKUP/scripts/reconciliar_pedidos_tiendanube.py"
@@ -66,6 +89,12 @@ install -m 600 "$SOURCE_SALES" "$TARGET_SALES"
 install -m 600 "$SOURCE_SYNC" "$TARGET_SYNC"
 install -m 600 "$SOURCE_ORDER_SYNC" "$TARGET_ORDER_SYNC"
 install -m 600 "$SOURCE_ORDER_SYNC_V2" "$TARGET_ORDER_SYNC_V2"
+mkdir -p "$TARGET/tiendanube/app/application" "$TARGET/tiendanube/app/presentation"
+install -m 600 "$SOURCE_WEBHOOK" "$TARGET_WEBHOOK"
+install -m 600 "$SOURCE_APPLICATION_INIT" "$TARGET_APPLICATION_INIT"
+install -m 600 "$SOURCE_ADMIN_SERVICE" "$TARGET_ADMIN_SERVICE"
+install -m 600 "$SOURCE_PRESENTATION_INIT" "$TARGET_PRESENTATION_INIT"
+install -m 600 "$SOURCE_REST_API" "$TARGET_REST_API"
 install -m 700 "$SOURCE_SCRIPT" "$TARGET_SCRIPT"
 install -m 700 "$SOURCE_RECONCILE" "$TARGET_RECONCILE"
 install -m 600 "$SOURCE_PROMPT" "$TARGET_PROMPT"
@@ -77,6 +106,9 @@ install -m 600 "$SOURCE_SKILL" "$TARGET_SKILL"
   "$TARGET_SYNC" \
   "$TARGET_ORDER_SYNC" \
   "$TARGET_ORDER_SYNC_V2" \
+  "$TARGET_WEBHOOK" \
+  "$TARGET_ADMIN_SERVICE" \
+  "$TARGET_REST_API" \
   "$TARGET_SCRIPT" \
   "$TARGET_RECONCILE"
 

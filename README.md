@@ -29,6 +29,29 @@ El workspace activo continúa en:
 Los instaladores crean respaldos privados en
 `/home/openclaw/secure-backups` antes de modificar ese workspace.
 
+## Arquitectura por capas y API REST
+
+El canal de Telegram y el webhook de Tiendanube conservan su funcionamiento.
+Además, el servidor HTTP expone una API REST administrativa protegida con
+`TN_ADMIN_API_TOKEN`:
+
+- `GET /api/v1/stock?marca=...&sabor=...`
+- `GET /api/v1/orders/{orden}`
+- `POST /api/v1/sales`
+- `POST /api/v1/sales/batch`
+
+Las responsabilidades quedan separadas así:
+
+- `app/presentation`: HTTP, rutas, autenticación y códigos de estado.
+- `app/application`: casos de uso de stock, ventas y órdenes.
+- `app/business`: reglas de negocio y validaciones.
+- `app/sync_core.py` y `order_sync*.py`: infraestructura para Sheets,
+  Tiendanube y persistencia operativa.
+
+La API no reemplaza Telegram ni los webhooks: es una entrada adicional para un
+panel administrativo o integraciones futuras. Si no existe
+`TN_ADMIN_API_TOKEN`, las rutas REST responden `503` y quedan deshabilitadas.
+
 ## Verificación local
 
 Las pruebas usan únicamente la biblioteca estándar de Python:

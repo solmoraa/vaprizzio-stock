@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hmac
 import json
 import os
 import sys
@@ -26,6 +25,8 @@ load_dotenv(ENV_FILE)
 sys.path.insert(0, str(TN_DIR))
 
 from app.order_sync_v2 import process_webhook
+from app.application import AdminApplicationService
+from app.presentation import AdminRestApi
 from app.sync_core import store_credentials
 
 
@@ -41,9 +42,9 @@ PORT = int(
     )
 )
 
-SECRET = os.environ.get(
-    "TN_WEBHOOK_SECRET",
-    "",
+ADMIN_API = AdminRestApi(
+    AdminApplicationService(),
+    os.environ.get("TN_ADMIN_API_TOKEN", ""),
 )
 
 
@@ -87,7 +88,8 @@ class WebhookHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
 
         if path in {
             "/health",
@@ -102,6 +104,16 @@ class WebhookHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if path.startswith("/api/v1/"):
+            status, result = ADMIN_API.dispatch(
+                "GET",
+                path,
+                query=parsed.query,
+                authorization=self.headers.get("Authorization"),
+            )
+            self.send_json(status, result)
+            return
+
         self.send_json(
             404,
             {
@@ -111,7 +123,28 @@ class WebhookHandler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self) -> None:
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path.startswith("/api/v1/"):
+            try:
+                payload = self.read_json_body()
+                status, result = ADMIN_API.dispatch(
+                    "POST",
+                    path,
+                    query=parsed.query,
+                    body=payload,
+                    authorization=self.headers.get("Authorization"),
+                )
+                self.send_json(status, result)
+            except json.JSONDecodeError:
+                self.send_json(400, {"ok": False, "error": "JSON inválido."})
+            except ValueError as error:
+                self.send_json(400, {"ok": False, "error": str(error)})
+            except Exception:
+                traceback.print_exc()
+                self.send_json(500, {"ok": False, "error": "INTERNAL_ERROR"})
+            return
 
         if path != "/tiendanube/webhook":
             self.send_json(
@@ -130,27 +163,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
         # coincida con la tienda conectada. Luego order_sync consulta
         # la orden mediante la API autenticada antes de procesarla.
         try:
-            length = int(
-                self.headers.get(
-                    "Content-Length",
-                    "0",
-                )
-            )
-
-            if length <= 0 or length > 1_000_000:
-                raise ValueError(
-                    "Tamaño de payload inválido."
-                )
-
-            body = self.rfile.read(length)
-            payload = json.loads(
-                body.decode("utf-8")
-            )
-
-            if not isinstance(payload, dict):
-                raise ValueError(
-                    "El payload debe ser un objeto JSON."
-                )
+            payload = self.read_json_body()
 
             store_id = payload.get("store_id")
             event = payload.get("event")
@@ -214,6 +227,16 @@ class WebhookHandler(BaseHTTPRequestHandler):
                     ),
                 },
             )
+
+    def read_json_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", "0"))
+        if length <= 0 or length > 1_000_000:
+            raise ValueError("Tamaño de payload inválido.")
+        body = self.rfile.read(length)
+        payload = json.loads(body.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("El payload debe ser un objeto JSON.")
+        return payload
 
 
 def main() -> None:
