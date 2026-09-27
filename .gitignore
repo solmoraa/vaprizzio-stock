@@ -6,7 +6,6 @@ backups_anteriores/
 .venv/
 .env
 .env.*
-!**/.env.example
 credentials/
 secrets/
 *.json

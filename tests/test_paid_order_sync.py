@@ -70,9 +70,6 @@ class PaidOrderSyncTests(unittest.TestCase):
         self.assertIn("SOURCE_ORDER_SYNC_V2=", installer)
         self.assertIn('install -m 600 "$SOURCE_ORDER_SYNC" "$TARGET_ORDER_SYNC"', installer)
         self.assertIn('install -m 600 "$SOURCE_ORDER_SYNC_V2" "$TARGET_ORDER_SYNC_V2"', installer)
-        self.assertIn('install -m 600 "$SOURCE_ADMIN_SERVICE" "$TARGET_ADMIN_SERVICE"', installer)
-        self.assertIn('install -m 600 "$SOURCE_REST_API" "$TARGET_REST_API"', installer)
-        self.assertIn('install -m 600 "$SOURCE_WEBHOOK" "$TARGET_WEBHOOK"', installer)
 
     def test_reconciliation_is_limited_and_uses_paid_order_filter(self) -> None:
         source = RECONCILE.read_text(encoding="utf-8")

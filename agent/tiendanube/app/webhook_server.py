@@ -25,8 +25,6 @@ load_dotenv(ENV_FILE)
 sys.path.insert(0, str(TN_DIR))
 
 from app.order_sync_v2 import process_webhook
-from app.application import AdminApplicationService
-from app.presentation import AdminRestApi
 from app.sync_core import store_credentials
 
 
@@ -41,12 +39,6 @@ PORT = int(
         "8787",
     )
 )
-
-ADMIN_API = AdminRestApi(
-    AdminApplicationService(),
-    os.environ.get("TN_ADMIN_API_TOKEN", ""),
-)
-
 
 class WebhookHandler(BaseHTTPRequestHandler):
     server_version = "VaprizzioWebhook/1.0"
@@ -88,8 +80,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        parsed = urlparse(self.path)
-        path = parsed.path
+        path = urlparse(self.path).path
 
         if path in {
             "/health",
@@ -104,16 +95,6 @@ class WebhookHandler(BaseHTTPRequestHandler):
             )
             return
 
-        if path.startswith("/api/v1/"):
-            status, result = ADMIN_API.dispatch(
-                "GET",
-                path,
-                query=parsed.query,
-                authorization=self.headers.get("Authorization"),
-            )
-            self.send_json(status, result)
-            return
-
         self.send_json(
             404,
             {
@@ -123,28 +104,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self) -> None:
-        parsed = urlparse(self.path)
-        path = parsed.path
-
-        if path.startswith("/api/v1/"):
-            try:
-                payload = self.read_json_body()
-                status, result = ADMIN_API.dispatch(
-                    "POST",
-                    path,
-                    query=parsed.query,
-                    body=payload,
-                    authorization=self.headers.get("Authorization"),
-                )
-                self.send_json(status, result)
-            except json.JSONDecodeError:
-                self.send_json(400, {"ok": False, "error": "JSON inválido."})
-            except ValueError as error:
-                self.send_json(400, {"ok": False, "error": str(error)})
-            except Exception:
-                traceback.print_exc()
-                self.send_json(500, {"ok": False, "error": "INTERNAL_ERROR"})
-            return
+        path = urlparse(self.path).path
 
         if path != "/tiendanube/webhook":
             self.send_json(
