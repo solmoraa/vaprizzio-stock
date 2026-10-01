@@ -12,6 +12,7 @@ AGENT = ROOT / "agent" / "scripts" / "agente_vaprizzio.py"
 PROMPT = ROOT / "agent" / "AGENTS.md"
 SKILL = ROOT / "agent" / "skills" / "vaprizzio-sheets" / "SKILL.md"
 INSTALLER = ROOT / "deploy" / "install-vaprizziobot-source.sh"
+ORDERING = ROOT / "agent" / "scripts" / "ordenar_ventas_al_principio.py"
 
 
 class BusinessError(Exception):
@@ -63,6 +64,25 @@ def load_resolution_functions() -> dict[str, Any]:
     }
     module = ast.Module(body=nodes, type_ignores=[])
     exec(compile(module, str(SALES), "exec"), namespace)
+    return namespace
+
+
+def load_insertion_functions() -> dict[str, Any]:
+    tree = ast.parse(SALES.read_text(encoding="utf-8"))
+    nodes = [
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "encontrar_fila_insercion"
+    ]
+    namespace = {
+        "Any": Any,
+        "BusinessError": BusinessError,
+        "normalizar": normalizar,
+    }
+    exec(
+        compile(ast.Module(body=nodes, type_ignores=[]), str(SALES), "exec"),
+        namespace,
+    )
     return namespace
 
 
@@ -237,6 +257,40 @@ class SalesModelResolutionTests(unittest.TestCase):
         self.assertIn("catalogo=catalogo", register)
         self.assertNotIn("aplicar_chips_vape(", write)
         self.assertIn("sheet_context=item.get(\"sheet_context\")", source)
+
+    def test_new_sales_are_inserted_below_headers_not_appended(self) -> None:
+        insertion = load_insertion_functions()["encontrar_fila_insercion"]
+
+        class Worksheet:
+            title = "Ventas Octubre"
+
+            def get_all_values(self):
+                raise AssertionError("No debe leer toda la hoja para ubicar la venta.")
+
+        row, summary = insertion(
+            Worksheet(),
+            {normalizar("Orden"): 1},
+        )
+        self.assertEqual((row, summary), (2, None))
+
+        source = SALES.read_text(encoding="utf-8")
+        write_start = source.index("def escribir_filas_venta(")
+        write_end = source.index("# ============================================================\n# STOCK", write_start)
+        write = source[write_start:write_end]
+        self.assertIn("row=start_row", write)
+        self.assertIn("inherit_from_before=False", write)
+        self.assertIn("source_row = start_row + row_count", write)
+
+    def test_repair_script_only_moves_out_of_place_sales_rows(self) -> None:
+        source = ORDERING.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        self.assertTrue(any(
+            isinstance(node, ast.FunctionDef) and node.name == "organize_sheet"
+            for node in tree.body
+        ))
+        self.assertIn('"ya_estaban_al_principio": already_ordered', source)
+        self.assertIn("if not rows or already_ordered or not apply:", source)
+        self.assertIn('"destinationIndex": 1', source)
 
     def test_stale_conflicting_lists_were_removed(self) -> None:
         sales_source = SALES.read_text(encoding="utf-8")
