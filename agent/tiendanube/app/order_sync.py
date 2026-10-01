@@ -707,6 +707,55 @@ def existing_order_rows(
     return result
 
 
+def write_rows_at_positions(
+    worksheet: gspread.Worksheet,
+    rows: list[int],
+    values: list[list[Any]],
+    total_columns: int,
+) -> None:
+    """Escribe cada línea en su fila exacta sin tocar las vecinas.
+
+    Una orden de Tiendanube puede recibir una línea nueva después de haber
+    sido registrada. No se puede reescribir un bloque continuo en ese caso:
+    entre una línea existente y la nueva puede haber una venta manual.
+    """
+    updates = [
+        {
+            "range": (
+                f"A{row_number}:"
+                f"{rowcol_to_a1(row_number, total_columns)}"
+            ),
+            "values": [row_values],
+        }
+        for row_number, row_values in zip(rows, values)
+    ]
+
+    if updates:
+        worksheet.batch_update(
+            updates,
+            value_input_option="USER_ENTERED",
+        )
+
+
+def insert_empty_order_rows(
+    worksheet: gspread.Worksheet,
+    *,
+    row: int,
+    count: int,
+    total_columns: int,
+) -> None:
+    """Abre espacio para una orden sin sobrescribir ventas posteriores."""
+    if count <= 0:
+        return
+
+    worksheet.insert_rows(
+        [[""] * total_columns for _ in range(count)],
+        row=row,
+        value_input_option="RAW",
+        inherit_from_before=True,
+    )
+
+
 def write_order_rows(
     order: dict[str, Any],
 ) -> dict[str, Any]:
@@ -860,17 +909,32 @@ def write_order_rows(
         )
 
     if old_rows:
-        start_row = min(old_rows)
-        end_row = max(old_rows)
+        # Las filas propias pueden no ser contiguas. Nunca se borra el rango
+        # entre ellas porque podría contener una venta manual de otro cliente.
+        target_rows = sorted(set(old_rows))
+        start_row = min(target_rows)
 
-        worksheet.batch_clear(
-            [
-                (
-                    f"A{start_row}:"
-                    f"{rowcol_to_a1(end_row, total_columns)}"
+        if len(rows_to_write) > len(target_rows):
+            insert_empty_order_rows(
+                worksheet,
+                row=max(target_rows) + 1,
+                count=len(rows_to_write) - len(target_rows),
+                total_columns=total_columns,
+            )
+            target_rows.extend(
+                range(
+                    max(target_rows) + 1,
+                    max(target_rows) + 1
+                    + len(rows_to_write) - len(target_rows),
                 )
-            ]
-        )
+            )
+
+        elif len(rows_to_write) < len(target_rows):
+            # Si Tiendanube quitó líneas, se eliminan solo las filas que
+            # pertenecen a esta orden, de abajo hacia arriba.
+            for row_number in reversed(target_rows[len(rows_to_write):]):
+                worksheet.delete_rows(row_number)
+            target_rows = target_rows[:len(rows_to_write)]
     else:
         values = worksheet.get_all_values()
 
@@ -886,31 +950,36 @@ def write_order_rows(
 
         start_row = last_data_row + 1
 
-    end_required = start_row + len(rows_to_write) - 1
-
-    if end_required > worksheet.row_count:
-        worksheet.add_rows(
-            end_required - worksheet.row_count + 20
+        # La primera fila posterior puede ser un total o contenido manual.
+        # Se desplaza antes de escribir, en vez de pisarla.
+        row_has_content = (
+            start_row <= len(values)
+            and any(str(cell).strip() for cell in values[start_row - 1])
         )
 
-    worksheet.update(
-        range_name=(
-            f"A{start_row}:"
-            f"{rowcol_to_a1(end_required, total_columns)}"
-        ),
-        values=rows_to_write,
-        value_input_option="USER_ENTERED",
+        if row_has_content:
+            insert_empty_order_rows(
+                worksheet,
+                row=start_row,
+                count=len(rows_to_write),
+                total_columns=total_columns,
+            )
+
+        end_required = start_row + len(rows_to_write) - 1
+
+        if end_required > worksheet.row_count:
+            worksheet.add_rows(
+                end_required - worksheet.row_count + 20
+            )
+
+        target_rows = list(range(start_row, end_required + 1))
+
+    write_rows_at_positions(
+        worksheet,
+        target_rows,
+        rows_to_write,
+        total_columns,
     )
-
-    if old_rows and end_required < max(old_rows):
-        worksheet.batch_clear(
-            [
-                (
-                    f"A{end_required + 1}:"
-                    f"{rowcol_to_a1(max(old_rows), total_columns)}"
-                )
-            ]
-        )
 
     return {
         "sheet": worksheet.title,
