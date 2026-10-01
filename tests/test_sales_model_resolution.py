@@ -86,6 +86,28 @@ def load_insertion_functions() -> dict[str, Any]:
     return namespace
 
 
+def load_ordering_functions() -> dict[str, Any]:
+    tree = ast.parse(ORDERING.read_text(encoding="utf-8"))
+    wanted = {
+        "is_numeric_order",
+        "numeric_order",
+        "sale_rows",
+        "out_of_place_rows",
+        "move_requests",
+        "sort_request",
+    }
+    nodes = [
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in wanted
+    ]
+    namespace = {"Any": Any}
+    exec(
+        compile(ast.Module(body=nodes, type_ignores=[]), str(ORDERING), "exec"),
+        namespace,
+    )
+    return namespace
+
+
 def load_batch_functions() -> dict[str, Any]:
     tree = ast.parse(AGENT.read_text(encoding="utf-8"))
     wanted = {
@@ -294,8 +316,45 @@ class SalesModelResolutionTests(unittest.TestCase):
         ))
         self.assertIn('"ya_estaban_al_principio": already_ordered', source)
         self.assertIn("misplaced_rows = out_of_place_rows(rows)", source)
+        self.assertIn("is_descending_by_order", source)
+        self.assertIn('"sortOrder": "DESCENDING"', source)
+        self.assertIn("legacy.run_with_sheets_retry", source)
         self.assertIn("if not rows or already_ordered or not apply:", source)
         self.assertIn('"destinationIndex": 1', source)
+
+    def test_repair_plan_moves_late_rows_then_sorts_latest_first(self) -> None:
+        functions = load_ordering_functions()
+        rows = functions["sale_rows"](
+            [["Orden"], ["1"], ["2"], [], ["126"], ["127"]],
+            1,
+        )
+        self.assertEqual(rows, [2, 3, 5, 6])
+        misplaced = functions["out_of_place_rows"](rows)
+        self.assertEqual(misplaced, [5, 6])
+
+        moves = functions["move_requests"](
+            sheet_id=9,
+            rows=misplaced,
+        )
+        self.assertEqual(
+            [request["moveDimension"]["source"]["startIndex"] for request in moves],
+            [5, 5],
+        )
+        self.assertTrue(all(
+            request["moveDimension"]["destinationIndex"] == 1
+            for request in moves
+        ))
+
+        sort = functions["sort_request"](
+            sheet_id=9,
+            row_count=4,
+            column_count=18,
+            order_column=1,
+        )
+        self.assertEqual(
+            sort["sortRange"]["sortSpecs"][0]["sortOrder"],
+            "DESCENDING",
+        )
 
     def test_stale_conflicting_lists_were_removed(self) -> None:
         sales_source = SALES.read_text(encoding="utf-8")

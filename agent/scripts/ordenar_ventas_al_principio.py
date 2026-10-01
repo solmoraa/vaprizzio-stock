@@ -21,6 +21,7 @@ TIENDANUBE_DIR = WORKSPACE / "tiendanube"
 if str(TIENDANUBE_DIR) not in sys.path:
     sys.path.insert(0, str(TIENDANUBE_DIR))
 
+from app import order_sync as legacy  # noqa: E402
 from app.sync_core import normalize, spreadsheet  # noqa: E402
 
 
@@ -44,6 +45,10 @@ def is_numeric_order(value: Any) -> bool:
         return False
 
 
+def numeric_order(value: Any) -> int:
+    return int(float(str(value).strip()))
+
+
 def sale_rows(values: list[list[str]], column: int) -> list[int]:
     return [
         row_number
@@ -62,6 +67,18 @@ def out_of_place_rows(rows: list[int]) -> list[int]:
         expected_row += 1
 
     return []
+
+
+def is_descending_by_order(
+    values: list[list[str]],
+    rows: list[int],
+    column: int,
+) -> bool:
+    orders = [
+        numeric_order(values[row - 1][column - 1])
+        for row in rows
+    ]
+    return orders == sorted(orders, reverse=True)
 
 
 def move_requests(
@@ -97,10 +114,41 @@ def move_requests(
     return requests
 
 
+def sort_request(
+    *,
+    sheet_id: int,
+    row_count: int,
+    column_count: int,
+    order_column: int,
+) -> dict[str, Any]:
+    """Ordena el bloque de ventas por número de orden, más reciente primero."""
+    return {
+        "sortRange": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": 1,
+                "endRowIndex": row_count + 1,
+                "startColumnIndex": 0,
+                "endColumnIndex": column_count,
+            },
+            "sortSpecs": [
+                {
+                    "dimensionIndex": order_column - 1,
+                    "sortOrder": "DESCENDING",
+                }
+            ],
+        }
+    }
+
+
 def organize_sheet(sheet_name: str, apply: bool) -> dict[str, Any]:
-    book = spreadsheet()
+    # La API de Google puede devolver 429 durante picos. Reutilizamos el
+    # reintento exponencial del sincronizador en cada operación de Sheets.
+    book = legacy.run_with_sheets_retry(spreadsheet)
     worksheet = book.worksheet(sheet_name)
-    values = worksheet.get_all_values()
+    values = legacy.run_with_sheets_retry(
+        worksheet.get_all_values
+    )
 
     if not values:
         raise ValueError(f"La hoja {sheet_name!r} está vacía.")
@@ -108,13 +156,19 @@ def organize_sheet(sheet_name: str, apply: bool) -> dict[str, Any]:
     column = order_column(values[0])
     rows = sale_rows(values, column)
     misplaced_rows = out_of_place_rows(rows)
-    already_ordered = not misplaced_rows
+    descending = is_descending_by_order(
+        values,
+        rows,
+        column,
+    ) if rows else True
+    already_ordered = not misplaced_rows and descending
 
     result: dict[str, Any] = {
         "ok": True,
         "hoja": worksheet.title,
         "filas_de_ventas": rows,
         "filas_fuera_de_lugar": misplaced_rows,
+        "orden_mas_reciente_primero": descending,
         "ya_estaban_al_principio": already_ordered,
         "aplicado": False,
     }
@@ -122,13 +176,25 @@ def organize_sheet(sheet_name: str, apply: bool) -> dict[str, Any]:
     if not rows or already_ordered or not apply:
         return result
 
-    worksheet.spreadsheet.batch_update(
-        {
-            "requests": move_requests(
+    requests = move_requests(
+        sheet_id=worksheet.id,
+        rows=misplaced_rows,
+    )
+
+    if len(rows) > 1:
+        requests.append(
+            sort_request(
                 sheet_id=worksheet.id,
-                rows=misplaced_rows,
+                row_count=len(rows),
+                column_count=worksheet.col_count,
+                order_column=column,
             )
-        }
+        )
+
+    legacy.run_with_sheets_retry(
+        lambda: worksheet.spreadsheet.batch_update(
+            {"requests": requests}
+        )
     )
     result["aplicado"] = True
     return result
