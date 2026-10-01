@@ -722,10 +722,25 @@ def normalizar_items(
 # TABLA DE VENTAS
 # ============================================================
 
+def fila_es_orden_numerica(
+    row: list[Any],
+    order_column: int,
+) -> bool:
+    value = celda(row, order_column)
+
+    try:
+        int(value)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
 def encontrar_fila_insercion(
     worksheet: Any,
     columns: dict[str, int],
 ) -> tuple[int, int | None]:
+    values = worksheet.get_all_values()
+
     order_column = columns.get(normalizar("Orden"))
 
     if not order_column:
@@ -734,11 +749,49 @@ def encontrar_fila_insercion(
             f"{worksheet.title}."
         )
 
-    # Las ventas más recientes van inmediatamente debajo del encabezado.
-    # Antes se buscaba la última orden numérica y se escribía después; eso
-    # mandaba las ventas nuevas al final de hojas que ya tenían historial.
-    # La inserción posterior desplaza filas, fórmulas y totales sin borrarlos.
-    return 2, None
+    numeric_rows = [
+        row_number
+        for row_number, row in enumerate(
+            values[1:],
+            start=2,
+        )
+        if fila_es_orden_numerica(
+            row,
+            order_column,
+        )
+    ]
+
+    start_row = (
+        max(numeric_rows) + 1
+        if numeric_rows
+        else 2
+    )
+
+    price_column = columns.get(
+        normalizar("Precio Venta")
+    )
+    gain_column = columns.get(
+        normalizar("Ganancia")
+    )
+    summary_row = None
+
+    for row_number in range(
+        start_row,
+        len(values) + 1,
+    ):
+        row = values[row_number - 1]
+
+        if (
+            not celda(row, order_column)
+            and (
+                celda(row, price_column)
+                or celda(row, gain_column)
+            )
+        ):
+            summary_row = row_number
+            break
+
+    return start_row, summary_row
 
 
 def copiar_formato_y_validacion(
@@ -1145,7 +1198,7 @@ def escribir_filas_venta(
     plataforma: str,
     forma_pago: str,
 ) -> list[int]:
-    start_row, _ = encontrar_fila_insercion(
+    start_row, summary_row = encontrar_fila_insercion(
         worksheet,
         columns,
     )
@@ -1158,21 +1211,28 @@ def escribir_filas_venta(
         20,
     )
 
-    # Crear lugar al principio de la tabla, sin sobrescribir ventas ni la
-    # fila de totales. Las filas existentes se desplazan hacia abajo.
-    worksheet.insert_rows(
-        [
-            [""] * max_column
-            for _ in range(row_count)
-        ],
-        row=start_row,
-        value_input_option="USER_ENTERED",
-        inherit_from_before=False,
-    )
+    if (
+        summary_row is not None
+        and end_row >= summary_row
+    ):
+        rows_needed = end_row - summary_row + 1
 
-    # Tras insertar, la antigua primera fila de datos queda debajo de las
-    # nuevas. La usamos como plantilla para conservar formato y desplegables.
-    source_row = start_row + row_count
+        worksheet.insert_rows(
+            [
+                [""] * max_column
+                for _ in range(rows_needed)
+            ],
+            row=summary_row,
+            value_input_option="USER_ENTERED",
+            inherit_from_before=True,
+        )
+
+    if end_row > worksheet.row_count:
+        worksheet.add_rows(
+            end_row - worksheet.row_count + 10
+        )
+
+    source_row = start_row - 1
 
     copiar_formato_y_validacion(
         worksheet,

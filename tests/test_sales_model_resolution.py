@@ -12,7 +12,7 @@ AGENT = ROOT / "agent" / "scripts" / "agente_vaprizzio.py"
 PROMPT = ROOT / "agent" / "AGENTS.md"
 SKILL = ROOT / "agent" / "skills" / "vaprizzio-sheets" / "SKILL.md"
 INSTALLER = ROOT / "deploy" / "install-vaprizziobot-source.sh"
-ORDERING = ROOT / "agent" / "scripts" / "ordenar_ventas_al_principio.py"
+SCHEMA_REPAIR = ROOT / "agent" / "scripts" / "reparar_esquema_ventas.py"
 
 
 class BusinessError(Exception):
@@ -71,38 +71,25 @@ def load_insertion_functions() -> dict[str, Any]:
     tree = ast.parse(SALES.read_text(encoding="utf-8"))
     nodes = [
         node for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and node.name == "encontrar_fila_insercion"
+        if isinstance(node, ast.FunctionDef) and node.name in {
+            "fila_es_orden_numerica",
+            "encontrar_fila_insercion",
+        }
     ]
+
+    def celda(row, column):
+        if not column or len(row) < column:
+            return ""
+        return row[column - 1]
+
     namespace = {
         "Any": Any,
         "BusinessError": BusinessError,
         "normalizar": normalizar,
+        "celda": celda,
     }
     exec(
         compile(ast.Module(body=nodes, type_ignores=[]), str(SALES), "exec"),
-        namespace,
-    )
-    return namespace
-
-
-def load_ordering_functions() -> dict[str, Any]:
-    tree = ast.parse(ORDERING.read_text(encoding="utf-8"))
-    wanted = {
-        "is_numeric_order",
-        "numeric_order",
-        "sale_rows",
-        "out_of_place_rows",
-        "move_requests",
-        "sort_request",
-    }
-    nodes = [
-        node for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name in wanted
-    ]
-    namespace = {"Any": Any}
-    exec(
-        compile(ast.Module(body=nodes, type_ignores=[]), str(ORDERING), "exec"),
         namespace,
     )
     return namespace
@@ -280,81 +267,60 @@ class SalesModelResolutionTests(unittest.TestCase):
         self.assertNotIn("aplicar_chips_vape(", write)
         self.assertIn("sheet_context=item.get(\"sheet_context\")", source)
 
-    def test_new_sales_are_inserted_below_headers_not_appended(self) -> None:
+    def test_new_sales_are_appended_after_the_last_order(self) -> None:
         insertion = load_insertion_functions()["encontrar_fila_insercion"]
 
         class Worksheet:
             title = "Ventas Octubre"
 
             def get_all_values(self):
-                raise AssertionError("No debe leer toda la hoja para ubicar la venta.")
+                return [
+                    ["Orden", "Cantidad", "Precio Venta", "Ganancia"],
+                    ["1", "1", "100", "20"],
+                    ["2", "1", "100", "20"],
+                    ["", "", "200", "40"],
+                ]
 
         row, summary = insertion(
             Worksheet(),
-            {normalizar("Orden"): 1},
+            {
+                normalizar("Orden"): 1,
+                normalizar("Precio Venta"): 3,
+                normalizar("Ganancia"): 4,
+            },
         )
-        self.assertEqual((row, summary), (2, None))
+        self.assertEqual((row, summary), (4, 4))
 
         source = SALES.read_text(encoding="utf-8")
         write_start = source.index("def escribir_filas_venta(")
         write_end = source.index("# ============================================================\n# STOCK", write_start)
         write = source[write_start:write_end]
-        self.assertIn("row=start_row", write)
-        self.assertIn("inherit_from_before=False", write)
-        self.assertIn("source_row = start_row + row_count", write)
+        self.assertIn("row=summary_row", write)
+        self.assertIn("source_row = start_row - 1", write)
+        self.assertNotIn("inherit_from_before=False", write)
 
-    def test_repair_script_only_moves_out_of_place_sales_rows(self) -> None:
-        source = ORDERING.read_text(encoding="utf-8")
+    def test_sale_schema_and_cancellation_are_available_to_the_agent(self) -> None:
+        sync = (ROOT / "agent" / "tiendanube" / "app" / "order_sync.py").read_text(
+            encoding="utf-8"
+        )
+        agent = AGENT.read_text(encoding="utf-8")
+        prompt = PROMPT.read_text(encoding="utf-8")
+
+        self.assertIn('for header in ("Vape", "Sabor")', sync)
+        self.assertIn('"insertDimension"', sync)
+        self.assertIn('"cancelar-orden": ejecutar_cancelar_orden', agent)
+        self.assertIn('sheet_name=payload.get("hoja")', agent)
+        self.assertIn("cancelar-orden", prompt)
+
+    def test_schema_repair_is_idempotent_and_uses_sheets_retry(self) -> None:
+        source = SCHEMA_REPAIR.read_text(encoding="utf-8")
         tree = ast.parse(source)
         self.assertTrue(any(
-            isinstance(node, ast.FunctionDef) and node.name == "organize_sheet"
+            isinstance(node, ast.FunctionDef) and node.name == "repair"
             for node in tree.body
         ))
-        self.assertTrue(any(
-            isinstance(node, ast.FunctionDef) and node.name == "out_of_place_rows"
-            for node in tree.body
-        ))
-        self.assertIn('"ya_estaban_al_principio": already_ordered', source)
-        self.assertIn("misplaced_rows = out_of_place_rows(rows)", source)
-        self.assertIn("is_descending_by_order", source)
-        self.assertIn('"sortOrder": "DESCENDING"', source)
+        self.assertIn("legacy.ensure_sales_headers(worksheet)", source)
         self.assertIn("legacy.run_with_sheets_retry", source)
-        self.assertIn("if not rows or already_ordered or not apply:", source)
-        self.assertIn('"destinationIndex": 1', source)
-
-    def test_repair_plan_moves_late_rows_then_sorts_latest_first(self) -> None:
-        functions = load_ordering_functions()
-        rows = functions["sale_rows"](
-            [["Orden"], ["1"], ["2"], [], ["126"], ["127"]],
-            1,
-        )
-        self.assertEqual(rows, [2, 3, 5, 6])
-        misplaced = functions["out_of_place_rows"](rows)
-        self.assertEqual(misplaced, [5, 6])
-
-        moves = functions["move_requests"](
-            sheet_id=9,
-            rows=misplaced,
-        )
-        self.assertEqual(
-            [request["moveDimension"]["source"]["startIndex"] for request in moves],
-            [5, 5],
-        )
-        self.assertTrue(all(
-            request["moveDimension"]["destinationIndex"] == 1
-            for request in moves
-        ))
-
-        sort = functions["sort_request"](
-            sheet_id=9,
-            row_count=4,
-            column_count=18,
-            order_column=1,
-        )
-        self.assertEqual(
-            sort["sortRange"]["sortSpecs"][0]["sortOrder"],
-            "DESCENDING",
-        )
 
     def test_stale_conflicting_lists_were_removed(self) -> None:
         sales_source = SALES.read_text(encoding="utf-8")
