@@ -288,7 +288,12 @@ class SalesModelResolutionTests(unittest.TestCase):
             isinstance(node, ast.FunctionDef) and node.name == "organize_sheet"
             for node in tree.body
         ))
+        self.assertTrue(any(
+            isinstance(node, ast.FunctionDef) and node.name == "out_of_place_rows"
+            for node in tree.body
+        ))
         self.assertIn('"ya_estaban_al_principio": already_ordered', source)
+        self.assertIn("misplaced_rows = out_of_place_rows(rows)", source)
         self.assertIn("if not rows or already_ordered or not apply:", source)
         self.assertIn('"destinationIndex": 1', source)
 

@@ -52,6 +52,18 @@ def sale_rows(values: list[list[str]], column: int) -> list[int]:
     ]
 
 
+def out_of_place_rows(rows: list[int]) -> list[int]:
+    """Devuelve solo las ventas que quedaron fuera del bloque inicial."""
+    expected_row = 2
+
+    for index, row in enumerate(rows):
+        if row != expected_row:
+            return rows[index:]
+        expected_row += 1
+
+    return []
+
+
 def move_requests(
     *,
     sheet_id: int,
@@ -95,14 +107,14 @@ def organize_sheet(sheet_name: str, apply: bool) -> dict[str, Any]:
 
     column = order_column(values[0])
     rows = sale_rows(values, column)
-    expected = list(range(2, len(rows) + 2))
-    already_ordered = rows == expected
+    misplaced_rows = out_of_place_rows(rows)
+    already_ordered = not misplaced_rows
 
     result: dict[str, Any] = {
         "ok": True,
         "hoja": worksheet.title,
         "filas_de_ventas": rows,
-        "filas_esperadas": expected,
+        "filas_fuera_de_lugar": misplaced_rows,
         "ya_estaban_al_principio": already_ordered,
         "aplicado": False,
     }
@@ -111,7 +123,12 @@ def organize_sheet(sheet_name: str, apply: bool) -> dict[str, Any]:
         return result
 
     worksheet.spreadsheet.batch_update(
-        {"requests": move_requests(sheet_id=worksheet.id, rows=rows)}
+        {
+            "requests": move_requests(
+                sheet_id=worksheet.id,
+                rows=misplaced_rows,
+            )
+        }
     )
     result["aplicado"] = True
     return result
