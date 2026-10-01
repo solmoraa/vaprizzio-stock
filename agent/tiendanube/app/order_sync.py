@@ -350,6 +350,54 @@ def ensure_sales_headers(
         )
 
     headers = list(values[header_row - 1])
+    normalized_headers = {
+        normalize(item)
+        for item in headers
+        if str(item).strip()
+    }
+
+    # Los campos comerciales centrales deben estar junto al cliente, como en
+    # las hojas mensuales históricas. Si una hoja fue creada con una plantilla
+    # incompleta, insertar columnas desplaza los datos existentes sin
+    # sobrescribir Fecha, Precio ni los identificadores de Tiendanube.
+    missing_core = [
+        header
+        for header in ("Vape", "Sabor")
+        if normalize(header) not in normalized_headers
+    ]
+
+    if missing_core:
+        client_column = next(
+            index
+            for index, header in enumerate(headers, start=1)
+            if normalize(header) == normalize("Cliente")
+        )
+        start_index = client_column
+        worksheet.spreadsheet.batch_update(
+            {
+                "requests": [
+                    {
+                        "insertDimension": {
+                            "range": {
+                                "sheetId": worksheet.id,
+                                "dimension": "COLUMNS",
+                                "startIndex": start_index,
+                                "endIndex": (
+                                    start_index
+                                    + len(missing_core)
+                                ),
+                            },
+                            "inheritFromBefore": True,
+                        }
+                    }
+                ]
+            }
+        )
+        values = worksheet.get_all_values()
+        headers = list(values[header_row - 1])
+
+        for offset, header in enumerate(missing_core):
+            headers[start_index + offset] = header
 
     for required in BASE_SALE_HEADERS + TECHNICAL_HEADERS:
         if normalize(required) not in {
