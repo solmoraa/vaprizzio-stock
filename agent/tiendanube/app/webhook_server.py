@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import sys
@@ -39,6 +40,12 @@ PORT = int(
         "8787",
     )
 )
+
+SECRET = os.environ.get(
+    "TN_WEBHOOK_SECRET",
+    "",
+)
+
 
 class WebhookHandler(BaseHTTPRequestHandler):
     server_version = "VaprizzioWebhook/1.0"
@@ -123,7 +130,27 @@ class WebhookHandler(BaseHTTPRequestHandler):
         # coincida con la tienda conectada. Luego order_sync consulta
         # la orden mediante la API autenticada antes de procesarla.
         try:
-            payload = self.read_json_body()
+            length = int(
+                self.headers.get(
+                    "Content-Length",
+                    "0",
+                )
+            )
+
+            if length <= 0 or length > 1_000_000:
+                raise ValueError(
+                    "Tamaño de payload inválido."
+                )
+
+            body = self.rfile.read(length)
+            payload = json.loads(
+                body.decode("utf-8")
+            )
+
+            if not isinstance(payload, dict):
+                raise ValueError(
+                    "El payload debe ser un objeto JSON."
+                )
 
             store_id = payload.get("store_id")
             event = payload.get("event")
@@ -187,16 +214,6 @@ class WebhookHandler(BaseHTTPRequestHandler):
                     ),
                 },
             )
-
-    def read_json_body(self) -> dict:
-        length = int(self.headers.get("Content-Length", "0"))
-        if length <= 0 or length > 1_000_000:
-            raise ValueError("Tamaño de payload inválido.")
-        body = self.rfile.read(length)
-        payload = json.loads(body.decode("utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError("El payload debe ser un objeto JSON.")
-        return payload
 
 
 def main() -> None:

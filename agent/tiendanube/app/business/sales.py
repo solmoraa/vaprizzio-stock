@@ -773,6 +773,7 @@ def encontrar_fila_insercion(
     gain_column = columns.get(
         normalizar("Ganancia")
     )
+
     summary_row = None
 
     for row_number in range(
@@ -781,12 +782,22 @@ def encontrar_fila_insercion(
     ):
         row = values[row_number - 1]
 
+        order_value = celda(
+            row,
+            order_column,
+        )
+        price_value = celda(
+            row,
+            price_column,
+        )
+        gain_value = celda(
+            row,
+            gain_column,
+        )
+
         if (
-            not celda(row, order_column)
-            and (
-                celda(row, price_column)
-                or celda(row, gain_column)
-            )
+            not order_value
+            and (price_value or gain_value)
         ):
             summary_row = row_number
             break

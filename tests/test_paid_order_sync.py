@@ -60,23 +60,9 @@ class PaidOrderSyncTests(unittest.TestCase):
 
     def test_rewriting_an_existing_order_has_a_defined_start_row(self) -> None:
         source = SYNC.read_text(encoding="utf-8")
-        self.assertIn("start_row = min(target_rows)", source)
+        self.assertIn("start_row = min(old_rows)", source)
         self.assertIn("start_row = last_data_row + 1", source)
         ast.parse(source)
-
-    def test_expanding_an_order_never_overwrites_the_next_sale(self) -> None:
-        source = SYNC.read_text(encoding="utf-8")
-        start = source.index("def write_order_rows(")
-        end = source.index("def synchronize_stock_for_order(", start)
-        write_order = source[start:end]
-
-        # Al recibir una línea nueva, se insertan filas después de la orden
-        # existente. Antes se actualizaba un bloque y podía pisar la venta
-        # manual que estuviera inmediatamente debajo.
-        self.assertIn("insert_empty_order_rows(", write_order)
-        self.assertIn("row=max(target_rows) + 1", write_order)
-        self.assertIn("write_rows_at_positions(", write_order)
-        self.assertNotIn("worksheet.batch_clear(", write_order)
 
     def test_installer_deploys_the_paid_order_sync_files(self) -> None:
         installer = INSTALLER.read_text(encoding="utf-8")

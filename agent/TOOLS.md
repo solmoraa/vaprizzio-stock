@@ -126,11 +126,6 @@ cliente, productos, cantidad ni fecha.
 `modificar-plataforma-venta` requiere `orden` y `plataforma`; cambia solamente
 ese campo y nunca vuelve a registrar la venta.
 
-`cancelar-orden` requiere `orden` y `confirmar:true`. Elimina la orden y
-repone su stock si es una venta manual; si corresponde a TiendaNube, usa la
-cancelación de esa plataforma. Antes de ejecutarla, solicitar confirmación
-explícita y no repetirla.
-
 Validación diagnóstica de solo lectura, solo si un humano la pide expresamente:
 
 `/home/openclaw/.openclaw/workspace/vaprizziobot/.venv/bin/python /home/openclaw/.openclaw/workspace/vaprizziobot/scripts/validar_catalogo_venta.py`

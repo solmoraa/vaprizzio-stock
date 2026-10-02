@@ -443,10 +443,7 @@ def ejecutar_cancelar_orden(
         )
 
     try:
-        found = find_by_internal_order(
-            numero,
-            sheet_name=payload.get("hoja"),
-        )
+        found = find_by_internal_order(numero)
     except Exception as exc:
         raise BusinessError(
             f"No se pudo buscar la orden: {exc}"

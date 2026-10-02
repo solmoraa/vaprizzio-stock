@@ -343,23 +343,14 @@ def find_by_tiendanube_id(
 
 def find_by_internal_order(
     internal_order: Any,
-    *,
-    sheet_name: Any = None,
 ) -> tuple[
     gspread.Worksheet,
     list[int],
     str,
 ] | None:
     expected = str(internal_order or "").strip()
-    expected_sheet = clean_text(sheet_name)
 
     for worksheet in sales_worksheets():
-        if (
-            expected_sheet
-            and clean_text(worksheet.title) != expected_sheet
-        ):
-            continue
-
         columns = sheet_columns(worksheet)
 
         order_column = columns.get(normalize("Orden"))

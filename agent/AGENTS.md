@@ -374,10 +374,5 @@ Ejecutar:
   limites de API, dispatcher, trazas ni otros diagnosticos internos.
 - Para cambiar solo el canal de una venta existente usar una vez
   `modificar-plataforma-venta`; no volver a registrar ni cambiar stock.
-- Para eliminar una venta, primero pedir confirmación explícita indicando que
-  se borrará la orden y se repondrá su stock. Con la confirmación, usar una
-  vez `agente_vaprizzio.py cancelar-orden` con `orden` y `confirmar:true`.
-  La herramienta identifica si es manual o de TiendaNube y aplica la
-  cancelación correcta. Nunca eliminar otra orden ni repetir la operación.
 <!-- FIN REGLAS CRITICAS VAP VENTA 20260831 -->
 
