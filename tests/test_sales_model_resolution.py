@@ -340,6 +340,16 @@ class SalesModelResolutionTests(unittest.TestCase):
         self.assertLess(len(prompt), 20_000)
         self.assertLess(len(prompt.encode("utf-8")), 20_000)
 
+    def test_multiple_sales_prompt_keeps_payment_and_channel_already_given(self) -> None:
+        prompt = PROMPT.read_text(encoding="utf-8")
+        skill = SKILL.read_text(encoding="utf-8")
+        self.assertIn("registrar-ventas", prompt)
+        self.assertIn("pago por MP", prompt)
+        self.assertIn("me habló por WhatsApp", prompt)
+        self.assertIn("misma_forma_anterior:true", prompt)
+        self.assertIn("No vuelvas a pedir datos ya dichos", skill)
+        self.assertIn("misma_forma_anterior:true", skill)
+
     def test_installer_only_targets_administrative_agent(self) -> None:
         source = INSTALLER.read_text(encoding="utf-8")
         self.assertIn("VAPRIZZIOBOT_TARGET", source)

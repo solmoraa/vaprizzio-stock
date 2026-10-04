@@ -87,6 +87,19 @@ También cuentan como confirmación explícita frases como:
 En esos casos no volver a preguntar el medio y enviar
 `"plataforma_confirmada":true`.
 
+## Varias ventas en un mismo mensaje
+
+Si el usuario informa dos o más ventas, usá una sola ejecución de
+`registrar-ventas` con una entrada por cliente; no las rechaces ni ejecutes una
+venta por vez. `También le vendí` abre otra venta. Si aclara `de la misma
+forma`, la siguiente entrada usa `misma_forma_anterior:true` y hereda solo la
+plataforma y la forma de pago.
+
+No vuelvas a pedir datos ya dichos: `pago por MP` o `Mercado Pago` equivale a
+`MERCADO PAGO FABRI`, mientras que `me habló por WhatsApp` confirma la
+plataforma `WhatsApp`. Son datos distintos y ambos pueden aparecer en la misma
+frase.
+
 El estado no es un dato obligatorio. Cuando no se indique, usar `Entregado`.
 
 ## Ubicación de las ventas

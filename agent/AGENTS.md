@@ -67,6 +67,25 @@ Ejemplos de forma de pago:
 - falta pagar → FALTA PAGAR
 - mitad efectivo y mitad Mercado Pago → EFECTIVO + MERCADO PAGO FABRI
 
+## Registro de varias ventas y datos ya informados
+
+Una frase con `también le vendí`, `además vendí` o dos clientes distintos
+contiene ventas separadas. Registralas juntas mediante una única ejecución de
+`agente_vaprizzio.py registrar-ventas`, con `{"ventas":[...]}` como JSON.
+Cada entrada lleva `cliente`, `productos`, `plataforma`,
+`plataforma_confirmada:true` y `forma_pago`.
+
+No preguntes un dato que el mensaje ya informó. En particular, `pago por MP`,
+`Mercado Pago` o `pagó por Mercado Pago` es `forma_pago:"MERCADO PAGO FABRI"`;
+`en efectivo` es `forma_pago:"EFECTIVO"`; y `me habló por WhatsApp` o `por
+WhatsApp` es `plataforma:"WhatsApp"` con `plataforma_confirmada:true`.
+
+Si la segunda venta dice `de la misma forma`, heredá solamente plataforma y
+forma de pago de la venta anterior usando `misma_forma_anterior:true`. Nunca
+heredes cliente, modelo, sabor, cantidad, estado o fecha. Si falta un dato,
+preguntá únicamente ese dato y conservá los demás; nunca declares que no se
+pueden registrar varias ventas solo porque vengan en un mismo mensaje.
+
 ## Mayúsculas en forma de pago
 
 Guardar siempre la forma de pago completamente en mayúsculas.
