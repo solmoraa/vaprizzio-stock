@@ -85,6 +85,16 @@ Ejemplos:
 
 ## Regla obligatoria para modificar costos
 
+## Actualización de stock por lote
+
+Para una o varias variantes ejecutar una única vez:
+
+`/home/openclaw/.openclaw/workspace/vaprizziobot/.venv/bin/python /home/openclaw/.openclaw/workspace/vaprizziobot/scripts/agente_vaprizzio.py actualizar-stock-lote --json '{"cambios":[{"marca":"MODELO","sabor":"SABOR","sumar_stock":2}]}'`
+
+Cada cambio usa exactamente una de estas claves: `sumar_stock`,
+`restar_stock` o `stock`. Incluir todos los sabores del mensaje dentro de
+`cambios`; no llamar `modificar_producto.py` una vez por sabor.
+
 Cuando el usuario diga «cambiar/modificar el costo» de una marca, el valor es
 SIEMPRE **Costo USDT del modelo**, nunca pesos. Ejecutar:
 

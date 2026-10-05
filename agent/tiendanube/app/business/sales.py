@@ -12,6 +12,7 @@ from app.sync_core import (
     modify_existing_product,
     read_products,
     sheet_product_context,
+    update_sheet_rows,
 )
 
 from .common import (
@@ -1371,6 +1372,8 @@ def escribir_filas_venta(
 
 def restar_stock_item(
     item: dict[str, Any],
+    *,
+    pending_sheet_updates: list[tuple[int, dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """
     Descuenta primero el stock real en Tiendanube.
@@ -1409,6 +1412,7 @@ def restar_stock_item(
             sabor=sabor,
             subtract_stock=int(cantidad),
             sheet_context=item.get("sheet_context"),
+            pending_sheet_updates=pending_sheet_updates,
         )
     except Exception as exc:
         raise BusinessError(
@@ -1553,11 +1557,24 @@ def registrar_venta_manual(
     )
 
     changed_stock = []
+    pending_sheet_updates: list[tuple[int, dict[str, Any]]] = []
 
     try:
         for item in items:
-            restar_stock_item(item)
+            restar_stock_item(
+                item,
+                pending_sheet_updates=pending_sheet_updates,
+            )
             changed_stock.append(item)
+
+        # Tiendanube ya aplicó cada descuento de forma atómica. Persistir los
+        # valores finales de Productos en una única llamada evita agotar la
+        # cuota de Google cuando una venta trae varios sabores.
+        update_sheet_rows(
+            products_worksheet,
+            product_columns,
+            pending_sheet_updates,
+        )
 
         rows = escribir_filas_venta(
             worksheet=worksheet,

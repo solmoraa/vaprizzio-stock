@@ -8,9 +8,12 @@ import re
 import sqlite3
 import time
 import unicodedata
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import fcntl
 
 import gspread
 import requests
@@ -44,6 +47,16 @@ DATABASE_PATH = Path(
 
 PRODUCT_SHEET = "Productos"
 
+# Google Sheets limita las solicitudes por cuenta de servicio. El agente puede
+# recibir varios mensajes a la vez (ventas, stock y sincronizaciones), por lo
+# que todas las lecturas y escrituras pasan por este turno compartido. Así no
+# se superponen procesos ni se reintenta una misma operación sin control.
+SHEETS_LOCK_FILE = Path("/tmp/vaprizzio-google-sheets.lock")
+SHEETS_LAST_CALL_FILE = Path(
+    "/tmp/vaprizzio-google-sheets-last-call.txt"
+)
+SHEETS_MIN_SECONDS_BETWEEN_CALLS = 1.25
+
 HEADERS = [
     "Marca",
     "Sabor",
@@ -67,6 +80,85 @@ CREDENTIAL_CANDIDATES = [
 
 class SyncError(RuntimeError):
     pass
+
+
+def _sheets_retryable(error: Exception) -> bool:
+    message = str(error).casefold()
+    return any(
+        text in message
+        for text in (
+            "[429]",
+            "quota exceeded",
+            "resource_exhausted",
+            "ratelimitexceeded",
+            "rate limit",
+            "[500]",
+            "[502]",
+            "[503]",
+            "[504]",
+        )
+    )
+
+
+@contextmanager
+def _sheets_turn():
+    """Serializa llamadas a Sheets incluso entre procesos distintos."""
+    SHEETS_LOCK_FILE.touch(exist_ok=True)
+    with SHEETS_LOCK_FILE.open("r+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _last_sheets_call() -> float:
+    try:
+        return float(SHEETS_LAST_CALL_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0.0
+
+
+def _mark_sheets_call() -> None:
+    SHEETS_LAST_CALL_FILE.write_text(
+        str(time.monotonic()),
+        encoding="utf-8",
+    )
+
+
+def run_sheets_request(operation, *, description: str):
+    """Ejecuta una llamada de Sheets espaciada y con reintentos seguros.
+
+    Se reintenta únicamente la llamada a Google Sheets; no se repiten cambios
+    ya enviados a Tiendanube. Un batch_update es idempotente porque escribe
+    los valores finales de cada celda.
+    """
+    # Dos ventanas completas de cuota mantienen la operación debajo del límite
+    # de ejecución del agente, sin volver a bombardear a Google.
+    delays = (65, 70)
+
+    with _sheets_turn():
+        for attempt in range(len(delays) + 1):
+            wait = (
+                SHEETS_MIN_SECONDS_BETWEEN_CALLS
+                - (time.monotonic() - _last_sheets_call())
+            )
+            if wait > 0:
+                time.sleep(wait)
+
+            try:
+                result = operation()
+                _mark_sheets_call()
+                return result
+            except Exception as error:
+                # La solicitud igualmente cuenta para Google aunque responda
+                # con error, por eso se registra antes de esperar el retry.
+                _mark_sheets_call()
+                if not _sheets_retryable(error) or attempt == len(delays):
+                    raise
+                time.sleep(delays[attempt])
+
+    raise SyncError(f"No se pudo completar {description} en Google Sheets.")
 
 
 @dataclass
@@ -358,8 +450,14 @@ def read_products() -> tuple[
     dict[str, int],
     list[SheetProduct],
 ]:
-    worksheet = products_worksheet()
-    values = worksheet.get_all_values()
+    def read_values():
+        worksheet = products_worksheet()
+        return worksheet, worksheet.get_all_values()
+
+    worksheet, values = run_sheets_request(
+        read_values,
+        description="la lectura del catálogo Productos",
+    )
     header_row = find_header_row(values)
     columns = header_map(values, header_row)
 
@@ -437,7 +535,16 @@ def find_sheet_product(
     SheetProduct,
 ]:
     worksheet, _, columns, products = read_products()
+    product = find_sheet_product_in_catalog(products, marca, sabor)
+    return worksheet, columns, product
 
+
+def find_sheet_product_in_catalog(
+    products: list[SheetProduct],
+    marca: str,
+    sabor: str,
+) -> SheetProduct:
+    """Busca una variante dentro de un catálogo ya cargado una sola vez."""
     marca_n = normalize(marca)
     sabor_n = normalize(sabor)
 
@@ -449,7 +556,7 @@ def find_sheet_product(
     ]
 
     if len(exact) == 1:
-        return worksheet, columns, exact[0]
+        return exact[0]
 
     flexible = [
         product
@@ -465,7 +572,7 @@ def find_sheet_product(
     ]
 
     if len(flexible) == 1:
-        return worksheet, columns, flexible[0]
+        return flexible[0]
 
     if not flexible:
         raise SyncError(
@@ -498,12 +605,11 @@ def sheet_product_context() -> tuple[
     return worksheet, columns, products
 
 
-def update_sheet_cells(
-    worksheet: gspread.Worksheet,
+def sheet_updates(
     columns: dict[str, int],
     row: int,
     values: dict[str, Any],
-) -> None:
+) -> list[dict[str, Any]]:
     updates = []
 
     for header, value in values.items():
@@ -514,19 +620,42 @@ def update_sheet_cells(
 
         updates.append(
             {
-                "range": gspread.utils.rowcol_to_a1(
-                    row,
-                    column,
-                ),
+                "range": gspread.utils.rowcol_to_a1(row, column),
                 "values": [[value]],
             }
         )
 
+    return updates
+
+
+def update_sheet_rows(
+    worksheet: gspread.Worksheet,
+    columns: dict[str, int],
+    rows: list[tuple[int, dict[str, Any]]],
+) -> None:
+    updates = [
+        update
+        for row, values in rows
+        for update in sheet_updates(columns, row, values)
+    ]
+
     if updates:
-        worksheet.batch_update(
-            updates,
-            value_input_option="USER_ENTERED",
+        run_sheets_request(
+            lambda: worksheet.batch_update(
+                updates,
+                value_input_option="USER_ENTERED",
+            ),
+            description="la actualización del catálogo Productos",
         )
+
+
+def update_sheet_cells(
+    worksheet: gspread.Worksheet,
+    columns: dict[str, int],
+    row: int,
+    values: dict[str, Any],
+) -> None:
+    update_sheet_rows(worksheet, columns, [(row, values)])
 
 
 def variant_flavor(variant: dict[str, Any]) -> str:
@@ -600,6 +729,7 @@ def synchronize_variant_to_sheet(
     product_name: str,
     variant: dict[str, Any],
     current_cost: float | None = None,
+    write: bool = True,
 ) -> dict[str, Any]:
     """Sincroniza datos comerciales sin pisar el costo local.
 
@@ -615,7 +745,10 @@ def synchronize_variant_to_sheet(
     # otra lectura de Google; los demás flujos mantienen el comportamiento
     # anterior cuando no lo proveen.
     if current_cost is None:
-        current_row = worksheet.row_values(row)
+        current_row = run_sheets_request(
+            lambda: worksheet.row_values(row),
+            description="la lectura de una fila de Productos",
+        )
         cost_column = columns.get(normalize("Costo"))
         current_cost = parse_float(cell(current_row, cost_column))
 
@@ -645,12 +778,13 @@ def synchronize_variant_to_sheet(
         "Estado Sync": "SINCRONIZADO",
     }
 
-    update_sheet_cells(
-        worksheet,
-        columns,
-        row,
-        data,
-    )
+    if write:
+        update_sheet_cells(
+            worksheet,
+            columns,
+            row,
+            data,
+        )
 
     return data
 
@@ -857,6 +991,7 @@ def modify_existing_product(
         dict[str, int],
         SheetProduct,
     ] | None = None,
+    pending_sheet_updates: list[tuple[int, dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     if sheet_context is None:
         worksheet, columns, sheet_product = find_sheet_product(
@@ -1031,7 +1166,13 @@ def modify_existing_product(
         product_name=product_name,
         variant=variant,
         current_cost=getattr(sheet_product, "costo", None),
+        write=pending_sheet_updates is None,
     )
+
+    if pending_sheet_updates is not None:
+        pending_sheet_updates.append(
+            (sheet_product.row, sheet_data)
+        )
 
     return {
         "ok": True,
@@ -1049,6 +1190,161 @@ def modify_existing_product(
         "variant_id": sheet_data[
             "TiendaNube Variant ID"
         ],
+    }
+
+
+def _batch_stock_value(
+    change: dict[str, Any],
+    *names: str,
+) -> int | None:
+    values = [
+        change[name]
+        for name in names
+        if change.get(name) is not None
+    ]
+
+    if not values:
+        return None
+
+    if len(values) > 1:
+        raise SyncError(
+            "Cada variante debe indicar una sola cantidad de stock."
+        )
+
+    try:
+        value = int(values[0])
+    except (TypeError, ValueError) as error:
+        raise SyncError(
+            "Las cantidades de stock deben ser números enteros."
+        ) from error
+
+    if value < 0:
+        raise SyncError(
+            "Las cantidades de stock no pueden ser negativas."
+        )
+
+    return value
+
+
+def modify_existing_products(
+    changes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Actualiza varias variantes usando una lectura y una escritura Sheets.
+
+    Las mutaciones de Tiendanube continúan siendo una por variante, porque son
+    atómicas por variante. La hoja, en cambio, se actualiza juntas una vez que
+    se conocen todos los valores finales. Si Google responde 429, únicamente
+    se reintenta esa escritura idempotente: no se repiten descuentos ni sumas.
+    """
+    if not isinstance(changes, list) or not changes:
+        raise SyncError("Debe indicar al menos una variante para actualizar.")
+
+    worksheet, columns, products = sheet_product_context()
+    prepared: list[tuple[dict[str, Any], SheetProduct]] = []
+    used_rows: set[int] = set()
+
+    # Validar y resolver todo antes de modificar Tiendanube. Esto evita que un
+    # sabor mal escrito deje a medias un lote que sí era válido.
+    for index, raw_change in enumerate(changes, start=1):
+        if not isinstance(raw_change, dict):
+            raise SyncError(
+                f"La variante {index} debe tener modelo, sabor y cantidad."
+            )
+
+        change = dict(raw_change)
+        marca = str(
+            change.get("marca")
+            or change.get("modelo")
+            or change.get("vape")
+            or ""
+        ).strip()
+        sabor = str(change.get("sabor") or "").strip()
+
+        if not marca or not sabor:
+            raise SyncError(
+                f"Falta el modelo o sabor de la variante {index}."
+            )
+
+        # Se aceptan las dos formas que usa el lenguaje del agente.
+        stock = _batch_stock_value(change, "stock")
+        add_stock = _batch_stock_value(
+            change,
+            "add_stock",
+            "sumar_stock",
+            "agregar_stock",
+        )
+        subtract_stock = _batch_stock_value(
+            change,
+            "subtract_stock",
+            "restar_stock",
+            "quitar_stock",
+        )
+
+        if sum(value is not None for value in (
+            stock,
+            add_stock,
+            subtract_stock,
+        )) != 1:
+            raise SyncError(
+                f"La variante {index} debe fijar, sumar o restar stock, "
+                "pero no más de una opción."
+            )
+
+        sheet_product = find_sheet_product_in_catalog(
+            products,
+            marca,
+            sabor,
+        )
+
+        if sheet_product.row in used_rows:
+            raise SyncError(
+                f"La variante {marca} / {sabor} está repetida en el lote."
+            )
+
+        used_rows.add(sheet_product.row)
+        change["marca"] = marca
+        change["sabor"] = sabor
+        change["stock"] = stock
+        change["add_stock"] = add_stock
+        change["subtract_stock"] = subtract_stock
+        prepared.append((change, sheet_product))
+
+    pending_sheet_updates: list[tuple[int, dict[str, Any]]] = []
+    results: list[dict[str, Any]] = []
+
+    try:
+        for change, sheet_product in prepared:
+            result = modify_existing_product(
+                marca=change["marca"],
+                sabor=change["sabor"],
+                stock=change["stock"],
+                add_stock=change["add_stock"],
+                subtract_stock=change["subtract_stock"],
+                sheet_context=(worksheet, columns, sheet_product),
+                pending_sheet_updates=pending_sheet_updates,
+            )
+            results.append(result)
+    except Exception:
+        # Si Tiendanube aceptó una parte antes de un error posterior, dejar la
+        # hoja consistente con esa parte y no inducir al usuario a repetirla.
+        if pending_sheet_updates:
+            update_sheet_rows(
+                worksheet,
+                columns,
+                pending_sheet_updates,
+            )
+        raise
+
+    update_sheet_rows(
+        worksheet,
+        columns,
+        pending_sheet_updates,
+    )
+
+    return {
+        "ok": True,
+        "mensaje": "Stock de las variantes sincronizado correctamente.",
+        "productos": results,
     }
 
 

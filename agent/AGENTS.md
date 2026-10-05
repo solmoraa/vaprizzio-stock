@@ -110,17 +110,16 @@ Interpretar correctamente la intención del usuario:
 - "Dejá el stock en 20" significa reemplazar el stock actual por 20.
 - "El stock es 20" significa reemplazar el stock actual por 20.
 
-Para sumar stock usar:
+Para actualizar stock usar siempre una sola ejecución de:
 
-`modificar-producto --sumar-stock CANTIDAD`
+`agente_vaprizzio.py actualizar-stock-lote --json {...}`
 
-Para restar stock usar:
-
-`modificar-producto --restar-stock CANTIDAD`
-
-Para establecer un valor absoluto usar:
-
-`modificar-producto --stock CANTIDAD`
+El JSON lleva `"cambios"` y cada variante incluye `marca`, `sabor` y una sola
+de estas claves: `sumar_stock`, `restar_stock` o `stock`. Si el usuario
+informa dos o más sabores o modelos en el mismo mensaje, deben ir todos dentro
+del mismo lote. Nunca ejecutar `modificar_producto.py` una vez por sabor ni
+consultar la hoja antes: el lote la lee una sola vez y escribe todos los
+resultados juntos.
 
 Nunca confundir “agregar 5” con “establecer el stock en 5”.
 
@@ -380,6 +379,11 @@ Ejecutar:
   ejecución por cada venta. No consultar stock antes ni ejecutar
   `validar_catalogo_venta.py` antes, durante o después de registrar: es una
   herramienta diagnóstica manual y agrega consultas innecesarias a Google.
+- Para actualizar stock de una o varias variantes usar una única ejecución de
+  `agente_vaprizzio.py actualizar-stock-lote`; no ejecutar
+  `modificar_producto.py` por cada sabor. Si devuelve `ok:false`, no repetir
+  el lote ni exponer comandos, rutas o límites internos: informar solamente
+  que la actualización quedó pendiente de revisión.
 - En `registrar-ventas`, enviar una entrada completa por cliente. Si el usuario
   dice expresamente «de la misma forma», la segunda entrada puede llevar
   `"misma_forma_anterior":true` y hereda únicamente plataforma y forma de

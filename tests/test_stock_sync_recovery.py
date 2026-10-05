@@ -11,6 +11,9 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 SYNC = ROOT / "agent" / "tiendanube" / "app" / "sync_core.py"
 INSTALLER = ROOT / "deploy" / "install-vaprizziobot-source.sh"
+AGENT = ROOT / "agent" / "scripts" / "agente_vaprizzio.py"
+INSTRUCTIONS = ROOT / "agent" / "AGENTS.md"
+SALES = ROOT / "agent" / "tiendanube" / "app" / "business" / "sales.py"
 
 
 class SyncError(RuntimeError):
@@ -223,6 +226,92 @@ class StockSyncRecoveryTests(unittest.TestCase):
         source = INSTALLER.read_text(encoding="utf-8")
         self.assertIn('SOURCE_SYNC="$SOURCE_AGENT/tiendanube/app/sync_core.py"', source)
         self.assertIn('install -m 600 "$SOURCE_SYNC" "$TARGET_SYNC"', source)
+
+    def test_google_sheets_requests_are_serialized_and_retried(self) -> None:
+        source = SYNC.read_text(encoding="utf-8")
+        self.assertIn("fcntl.flock", source)
+        self.assertIn("SHEETS_MIN_SECONDS_BETWEEN_CALLS", source)
+        self.assertIn("quota exceeded", source)
+        self.assertIn("def run_sheets_request", source)
+        self.assertIn("worksheet, values = run_sheets_request(", source)
+        self.assertIn("lambda: worksheet.batch_update(", source)
+
+    def test_stock_batch_reads_and_writes_products_once(self) -> None:
+        source = SYNC.read_text(encoding="utf-8")
+        start = source.index("def modify_existing_products(")
+        batch = source[start:source.index("\ndef find_product_by_name(", start)]
+        self.assertIn("sheet_product_context()", batch)
+        self.assertIn("pending_sheet_updates", batch)
+        self.assertIn("update_sheet_rows(", batch)
+        self.assertIn("pending_sheet_updates=pending_sheet_updates", batch)
+        self.assertIn("find_sheet_product_in_catalog", batch)
+
+    def test_stock_batch_reuses_one_catalog_and_one_sheet_write(self) -> None:
+        calls = []
+        products = [
+            SimpleNamespace(row=7, marca="Elfbar Ice King 40k", sabor="Grape Ice"),
+            SimpleNamespace(row=8, marca="Elfbar Ice King 40k", sabor="Miami Mint"),
+        ]
+
+        def sheet_product_context():
+            calls.append("catalog")
+            return "worksheet", {"stock": 3}, products
+
+        def find_sheet_product_in_catalog(catalog, marca, sabor):
+            return next(
+                product for product in catalog
+                if product.marca == marca and product.sabor == sabor
+            )
+
+        def modify_existing_product(**kwargs):
+            pending = kwargs["pending_sheet_updates"]
+            product = kwargs["sheet_context"][2]
+            data = {"Marca": product.marca, "Sabor": product.sabor}
+            pending.append((product.row, data))
+            return {"ok": True, "sabor": product.sabor}
+
+        def update_sheet_rows(worksheet, columns, rows):
+            calls.append((worksheet, columns, list(rows)))
+
+        namespace = load_functions(
+            {"_batch_stock_value", "modify_existing_products"},
+            {
+                "sheet_product_context": sheet_product_context,
+                "find_sheet_product_in_catalog": find_sheet_product_in_catalog,
+                "modify_existing_product": modify_existing_product,
+                "update_sheet_rows": update_sheet_rows,
+            },
+        )
+        result = namespace["modify_existing_products"]([
+            {"marca": "Elfbar Ice King 40k", "sabor": "Grape Ice", "sumar_stock": 2},
+            {"marca": "Elfbar Ice King 40k", "sabor": "Miami Mint", "restar_stock": 1},
+        ])
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(calls[0], "catalog")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            calls[1][2],
+            [
+                (7, {"Marca": "Elfbar Ice King 40k", "Sabor": "Grape Ice"}),
+                (8, {"Marca": "Elfbar Ice King 40k", "Sabor": "Miami Mint"}),
+            ],
+        )
+
+    def test_stock_batch_is_available_to_the_agent(self) -> None:
+        agent = AGENT.read_text(encoding="utf-8")
+        instructions = INSTRUCTIONS.read_text(encoding="utf-8")
+        self.assertIn("def ejecutar_actualizar_stock_lote", agent)
+        self.assertIn('"actualizar-stock-lote"', agent)
+        self.assertIn("modify_existing_products", agent)
+        self.assertIn("actualizar-stock-lote", instructions)
+        self.assertLess(len(instructions), 20_000)
+
+    def test_one_sale_with_many_products_batches_product_sheet_write(self) -> None:
+        source = SALES.read_text(encoding="utf-8")
+        self.assertIn("pending_sheet_updates", source)
+        self.assertIn("pending_sheet_updates=pending_sheet_updates", source)
+        self.assertIn("update_sheet_rows(", source)
 
 
 if __name__ == "__main__":

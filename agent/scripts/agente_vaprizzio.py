@@ -20,6 +20,7 @@ if str(TIENDANUBE) not in sys.path:
 
 from app.business.common import BusinessError  # noqa: E402
 from app.business.products import consultar_stock  # noqa: E402
+from app.sync_core import modify_existing_products  # noqa: E402
 from app.business.costs import (  # noqa: E402
     actualizar_costo_usdt_marca,
     actualizar_valor_usdt,
@@ -220,6 +221,49 @@ def ejecutar_consultar_stock(
             payload.get("solo_disponibles", False)
         ),
     )
+
+
+def ejecutar_actualizar_stock_lote(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    cambios = payload.get("cambios") or payload.get("productos")
+
+    if not isinstance(cambios, list) or not cambios:
+        raise BusinessError(
+            "cambios debe ser una lista no vacía de variantes."
+        )
+
+    normalizados: list[dict[str, Any]] = []
+    for index, cambio in enumerate(cambios, start=1):
+        if not isinstance(cambio, dict):
+            raise BusinessError(
+                f"La variante {index} debe ser un objeto JSON."
+            )
+
+        item = dict(cambio)
+        modelo = (
+            item.get("marca")
+            or item.get("modelo")
+            or item.get("vape")
+        )
+        if modelo:
+            item["marca"] = normalizar_modelo(modelo)
+            item.pop("modelo", None)
+            item.pop("vape", None)
+
+        # También se entiende una orden simple: cantidad + operación.
+        operacion = str(item.get("operacion") or "").strip().lower()
+        if item.get("cantidad") is not None and operacion:
+            if operacion in {"sumar", "agregar", "ingresar", "+"}:
+                item.setdefault("sumar_stock", item["cantidad"])
+            elif operacion in {"restar", "quitar", "-"}:
+                item.setdefault("restar_stock", item["cantidad"])
+            elif operacion in {"fijar", "establecer", "reemplazar"}:
+                item.setdefault("stock", item["cantidad"])
+
+        normalizados.append(item)
+
+    return modify_existing_products(normalizados)
 
 
 def datos_venta(
@@ -680,6 +724,7 @@ ACCIONES = {
     "crear-modelo": ejecutar_crear_modelo,
     "eliminar-modelo": ejecutar_eliminar_modelo,
     "consultar-stock": ejecutar_consultar_stock,
+    "actualizar-stock-lote": ejecutar_actualizar_stock_lote,
     "actualizar-costo-usdt": ejecutar_actualizar_costo_usdt,
     "actualizar-valor-usdt": ejecutar_actualizar_valor_usdt,
     "registrar-venta": ejecutar_registrar_venta,
